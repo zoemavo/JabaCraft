@@ -1,0 +1,13 @@
+# Rust build output
+/target/
+/dist/
+/installer/.staging/
+
+# IDE and editor settings
+.idea/
+.vscode/
+*.swp
+
+# Operating-system files
+.DS_Store
+Thumbs.db

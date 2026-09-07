@@ -1,0 +1,25 @@
+[package]
+name = "rustcraft"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = [
+    "std",
+    "bevy_log",
+    "bevy_pbr",
+    "bevy_winit",
+    "bevy_state",
+] }
+
+# Keep local verification lightweight while the project is still an application shell.
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.test]
+debug = 0
+incremental = false
+
+[profile.release]
+strip = "symbols"
