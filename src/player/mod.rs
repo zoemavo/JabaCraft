@@ -4,6 +4,7 @@ mod collision;
 mod components;
 mod systems;
 
+use crate::inventory::InventoryInputSet;
 use bevy::prelude::*;
 
 pub use components::{
@@ -44,7 +45,9 @@ impl Plugin for PlayerPlugin {
             .add_systems(Startup, systems::capture_cursor_on_startup)
             .add_systems(
                 PreUpdate,
-                systems::update_cursor_grab.in_set(PlayerPhysicsSet::Cursor),
+                systems::update_cursor_grab
+                    .in_set(PlayerPhysicsSet::Cursor)
+                    .after(InventoryInputSet::Toggle),
             )
             .add_systems(
                 PreUpdate,

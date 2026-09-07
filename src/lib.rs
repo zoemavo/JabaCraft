@@ -8,6 +8,7 @@ pub mod game;
 pub mod generation;
 pub mod interaction;
 pub mod inventory;
+pub mod item;
 pub mod meshing;
 pub mod persistence;
 pub mod player;

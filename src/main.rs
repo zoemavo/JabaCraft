@@ -4,6 +4,7 @@ use rustcraft::{
     game::GamePlugin,
     interaction::InteractionPlugin,
     inventory::InventoryPlugin,
+    item::ItemPlugin,
     persistence::PersistencePlugin,
     player::PlayerPlugin,
     scene::ScenePlugin,
@@ -29,8 +30,9 @@ fn main() {
             PlayerPlugin,
             WorldPlugin,
             ScenePlugin,
-            InteractionPlugin,
+            ItemPlugin,
             InventoryPlugin,
+            InteractionPlugin,
             PersistencePlugin,
             UiPlugin,
         ))

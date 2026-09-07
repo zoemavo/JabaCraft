@@ -9,6 +9,7 @@ use bevy::{
 use super::{
     Grounded, LookState, Noclip, Player, PlayerCamera, PlayerController, PlayerSettings, Velocity,
 };
+use crate::inventory::InventoryState;
 
 pub(super) fn capture_cursor_on_startup(
     mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
@@ -19,9 +20,14 @@ pub(super) fn capture_cursor_on_startup(
 pub(super) fn update_cursor_grab(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
+    inventory_state: Res<InventoryState>,
     mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
-    if keyboard.just_pressed(KeyCode::Escape) {
+    if inventory_state.is_open() {
+        set_cursor_captured(&mut cursor, false);
+    } else if inventory_state.is_changed() {
+        set_cursor_captured(&mut cursor, true);
+    } else if keyboard.just_pressed(KeyCode::Escape) {
         set_cursor_captured(&mut cursor, false);
     } else if mouse_buttons.just_pressed(MouseButton::Left) {
         set_cursor_captured(&mut cursor, true);
@@ -31,10 +37,11 @@ pub(super) fn update_cursor_grab(
 pub(super) fn collect_movement_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     cursor: Single<&CursorOptions, With<PrimaryWindow>>,
+    inventory_state: Res<InventoryState>,
     mut players: Query<&mut PlayerController, With<Player>>,
 ) {
     for mut controller in &mut players {
-        if cursor.grab_mode == CursorGrabMode::None {
+        if inventory_state.is_open() || cursor.grab_mode == CursorGrabMode::None {
             *controller = PlayerController::default();
             continue;
         }
@@ -45,7 +52,7 @@ pub(super) fn collect_movement_input(
         )
         .normalize_or_zero();
         controller.sprinting =
-            keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+            keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
         controller.jump_requested = keyboard.just_pressed(KeyCode::Space);
         controller.vertical_movement = if keyboard.pressed(KeyCode::Space) {
             1.0
@@ -59,9 +66,10 @@ pub(super) fn collect_movement_input(
 
 pub(super) fn toggle_noclip(
     keyboard: Res<ButtonInput<KeyCode>>,
+    inventory_state: Res<InventoryState>,
     mut players: Query<(&mut Noclip, &mut Grounded), With<Player>>,
 ) {
-    if !keyboard.just_pressed(KeyCode::F4) {
+    if inventory_state.is_open() || !keyboard.just_pressed(KeyCode::F4) {
         return;
     }
 
@@ -78,10 +86,14 @@ pub(super) fn toggle_noclip(
 pub(super) fn collect_look_input(
     mouse_motion: Res<AccumulatedMouseMotion>,
     cursor: Single<&CursorOptions, With<PrimaryWindow>>,
+    inventory_state: Res<InventoryState>,
     settings: Res<PlayerSettings>,
     mut players: Query<&mut LookState, With<Player>>,
 ) {
-    if cursor.grab_mode == CursorGrabMode::None || mouse_motion.delta == Vec2::ZERO {
+    if inventory_state.is_open()
+        || cursor.grab_mode == CursorGrabMode::None
+        || mouse_motion.delta == Vec2::ZERO
+    {
         return;
     }
 

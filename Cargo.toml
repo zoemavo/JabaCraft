@@ -7,9 +7,13 @@ edition = "2024"
 bevy = { version = "0.19", default-features = false, features = [
     "std",
     "bevy_log",
+    "bevy_gizmos",
     "bevy_pbr",
+    "bevy_ui",
+    "bevy_ui_render",
     "bevy_winit",
     "bevy_state",
+    "default_font",
 ] }
 
 # Keep local verification lightweight while the project is still an application shell.

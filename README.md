@@ -21,9 +21,10 @@ plugin owns its resources and future systems.
 - `generation` — deterministic climate maps, biomes, terrain, caves, ores, trees, and player-relative chunk streaming.
 - `meshing` — visible-face extraction, a procedural original texture atlas, and the `ChunkMeshingPlugin` render lifecycle.
 - `interaction` — block targeting, breaking, and placing.
-- `inventory` — items, inventory movement, and future crafting integration.
+- `item` — distinct item IDs, definitions, block-item mappings, and stack rules.
+- `inventory` — 9 hotbar slots, 27 storage slots, cursor-held stacks, and item movement rules.
 - `persistence` — world/player save, load, and data migrations.
-- `ui` — HUD, menus, and UI-driven state transitions.
+- `ui` — crosshair, persistent hotbar, and the separate modal inventory presentation.
 
 Voxel blocks remain inside `ChunkStorage`. Rendering state is owned separately
 by `ChunkRenderer`, whose `ChunkPos` mapping tracks one Bevy entity and one mesh
@@ -84,12 +85,22 @@ configuration and inserted into the main world on a later frame.
 ### Debug controls
 
 - `W`, `A`, `S`, `D` — move relative to the camera direction.
-- `Shift` — sprint while normal collision mode is active.
+- `Ctrl` — sprint while normal collision mode is active.
 - `Space` — jump, only while grounded.
 - `F4` — toggle optional debug noclip mode.
 - In noclip: `WASD` follows the full camera view, `Space` ascends, and `Shift` descends.
 - Mouse — rotate the first-person camera.
-- `Escape` — release the cursor; left-click the window to capture it again.
+- Left mouse button — instantly break the selected breakable block. Holding it
+  repeats at a debounced rate instead of once per rendered frame.
+- Right mouse button — place the selected hotbar block against the hit
+  face. Placement cannot overlap the player, replace a solid voxel, or leave
+  the configured vertical world bounds.
+- `1`–`9` or mouse wheel — select one of the nine hotbar slots. The selected
+  block item resolves to a `BlockId` through `ItemRegistry` and loses one item on success.
+- `E` — open or close the inventory; `Escape` also closes it.
+- Inventory mouse controls: left-click takes, places, merges, or swaps a stack;
+  right-click takes half or places one item.
+- With inventory closed, `Escape` releases the cursor; left-click captures it again.
 
 Walk, sprint, noclip speed, acceleration, deceleration, jump, gravity, terminal
 velocity, collider dimensions, mouse sensitivity, and pitch limit are configured
@@ -107,6 +118,14 @@ a default reach of five blocks. It reports the first non-air voxel, its
 `BlockId`, hit face and axis-aligned normal, plus the previous empty cell for
 future block placement. Unloaded chunks stop traversal so interaction cannot
 pass through unknown world data.
+
+The current target is shown with a slightly expanded 12-edge wireframe. It is
+drawn through reusable Bevy gizmo buffers, avoiding z-fighting without spawning
+per-frame entities or placing a material cube over the voxel.
+
+Left-click breaking validates the current block through `BlockRegistry`, replaces
+only breakable non-air voxels with `Air`, and uses `ChunkStorage::set_block` so
+the changed chunk and any loaded face-neighbor at a chunk boundary are remeshed.
 
 ## Roadmap
 
