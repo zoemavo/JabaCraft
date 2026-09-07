@@ -1,3 +1,3 @@
-ENG: hardcore open sauce mancrouft
+🇺🇸: hardcore open sauce mancrouft
 
-RUS: жоский опен сос манкруфт
+🇷🇺: жоский опен сос манкруфт
