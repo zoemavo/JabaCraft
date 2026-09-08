@@ -1,97 +1,236 @@
-use std::f32::consts::TAU;
+use std::f32::consts::PI;
 
-use bevy::prelude::*;
+use bevy::{
+    asset::RenderAssetUsages, mesh::Indices, prelude::*, render::render_resource::PrimitiveTopology,
+};
 
-use crate::{interaction::MiningProgress, inventory::InventoryState};
+use crate::{interaction::MiningProgress, inventory::InventoryState, player::PlayerCamera};
 
-const HAND_WIDTH: f32 = 96.0;
-const HAND_HEIGHT: f32 = 288.0;
-const IDLE_ROTATION: f32 = -0.34;
+const ARM_WIDTH: f32 = 0.22;
+const ARM_HEIGHT: f32 = 0.66;
+const ARM_DEPTH: f32 = 0.22;
+const IDLE_TRANSLATION: Vec3 = Vec3::new(0.25, 0.01, -0.62);
+const IDLE_ROTATION: Vec3 = Vec3::new(0.55, -0.55, 0.32);
 
 #[derive(Component)]
 pub(super) struct FirstPersonHandRoot;
 
-#[derive(Component)]
-pub(super) struct FirstPersonHandSprite;
+pub(super) fn spawn_first_person_hand(
+    mut commands: Commands,
+    camera: Single<Entity, With<PlayerCamera>>,
+    assets: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let skin = assets.load("ui/steve.png");
+    let base_material = materials.add(StandardMaterial {
+        base_color_texture: Some(skin.clone()),
+        unlit: true,
+        perceptual_roughness: 1.0,
+        depth_bias: 10_000.0,
+        ..default()
+    });
+    let sleeve_material = materials.add(StandardMaterial {
+        base_color_texture: Some(skin),
+        unlit: true,
+        alpha_mode: AlphaMode::Mask(0.1),
+        perceptual_roughness: 1.0,
+        depth_bias: 10_001.0,
+        ..default()
+    });
+    let base_mesh = meshes.add(arm_mesh(false));
+    let sleeve_mesh = meshes.add(arm_mesh(true));
+    let pose = hand_pose(&MiningProgress::default());
 
-pub(super) fn spawn_first_person_hand(mut commands: Commands, assets: Res<AssetServer>) {
-    commands
-        .spawn((
-            Name::new("First Person Hand Root"),
-            FirstPersonHandRoot,
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                width: Val::Px(240.0),
-                height: Val::Px(360.0),
-                overflow: Overflow::clip(),
-                ..default()
-            },
-            GlobalZIndex(80),
-        ))
-        .with_child((
-            Name::new("Steve Right Arm"),
-            FirstPersonHandSprite,
-            ImageNode::new(assets.load("ui/steve_hand.png")),
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(-8.0),
-                bottom: Val::Px(-92.0),
-                width: Val::Px(HAND_WIDTH),
-                height: Val::Px(HAND_HEIGHT),
-                ..default()
-            },
-            UiTransform {
-                rotation: Rot2::radians(IDLE_ROTATION),
-                ..default()
-            },
-        ));
+    commands.entity(*camera).with_children(|camera| {
+        camera
+            .spawn((
+                Name::new("First Person Hand Root"),
+                FirstPersonHandRoot,
+                Transform::from_translation(pose.translation).with_rotation(pose.rotation),
+                Visibility::Inherited,
+            ))
+            .with_children(|pivot| {
+                pivot.spawn((
+                    Name::new("Steve Right Arm"),
+                    Mesh3d(base_mesh),
+                    MeshMaterial3d(base_material),
+                ));
+                pivot.spawn((
+                    Name::new("Steve Right Sleeve"),
+                    Mesh3d(sleeve_mesh),
+                    MeshMaterial3d(sleeve_material),
+                ));
+            });
+    });
 }
 
 pub(super) fn sync_first_person_hand(
     inventory_state: Res<InventoryState>,
     mining: Res<MiningProgress>,
-    mut root: Single<&mut Node, With<FirstPersonHandRoot>>,
-    mut hand: Single<&mut UiTransform, With<FirstPersonHandSprite>>,
+    mut hand: Single<(&mut Transform, &mut Visibility), With<FirstPersonHandRoot>>,
 ) {
-    root.display = if inventory_state.is_open() {
-        Display::None
+    *hand.1 = if inventory_state.is_open() {
+        Visibility::Hidden
     } else {
-        Display::Flex
+        Visibility::Inherited
     };
 
     let pose = hand_pose(&mining);
-    hand.translation = Val2::px(pose.translation.x, pose.translation.y);
-    hand.rotation = Rot2::radians(pose.rotation);
-    hand.scale = Vec2::splat(pose.scale);
+    hand.0.translation = pose.translation;
+    hand.0.rotation = pose.rotation;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct HandPose {
-    translation: Vec2,
-    rotation: f32,
-    scale: f32,
+    translation: Vec3,
+    rotation: Quat,
 }
 
 fn hand_pose(mining: &MiningProgress) -> HandPose {
     if !mining.is_active() {
         return HandPose {
-            translation: Vec2::ZERO,
-            rotation: IDLE_ROTATION,
-            scale: 1.0,
+            translation: IDLE_TRANSLATION,
+            rotation: Quat::from_euler(
+                EulerRot::XYZ,
+                IDLE_ROTATION.x,
+                IDLE_ROTATION.y,
+                IDLE_ROTATION.z,
+            ),
         };
     }
 
-    // The arm repeats a Minecraft-like swing while also moving farther into
-    // the strike as the current block approaches its breaking threshold.
-    let swing = (mining.elapsed() * TAU * 1.8).sin().abs();
-    let completion = mining.normalized();
+    let phase = (mining.elapsed() * 3.2).fract();
+    let swing = (phase * PI).sin();
+    let follow_through = (phase * PI * 2.0).sin();
     HandPose {
-        translation: Vec2::new(-72.0 * swing - 10.0 * completion, 28.0 * swing),
-        rotation: IDLE_ROTATION - 0.72 * swing,
-        scale: 1.0 + 0.06 * swing,
+        translation: IDLE_TRANSLATION + Vec3::new(-0.13 * swing, 0.06 * swing, -0.05 * swing),
+        rotation: Quat::from_euler(
+            EulerRot::XYZ,
+            IDLE_ROTATION.x + 0.95 * swing,
+            IDLE_ROTATION.y + 0.22 * swing,
+            IDLE_ROTATION.z - 0.18 * follow_through,
+        ),
     }
+}
+
+#[derive(Clone, Copy)]
+struct UvRect {
+    min: Vec2,
+    max: Vec2,
+}
+
+impl UvRect {
+    const fn pixels(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self {
+            min: Vec2::new(x / 128.0, y / 128.0),
+            max: Vec2::new((x + width) / 128.0, (y + height) / 128.0),
+        }
+    }
+
+    fn corners(self) -> [[f32; 2]; 4] {
+        [
+            [self.min.x, self.max.y],
+            [self.max.x, self.max.y],
+            [self.max.x, self.min.y],
+            [self.min.x, self.min.y],
+        ]
+    }
+}
+
+fn arm_mesh(sleeve: bool) -> Mesh {
+    let expansion = if sleeve { 0.012 } else { 0.0 };
+    let half_x = ARM_WIDTH * 0.5 + expansion;
+    let half_z = ARM_DEPTH * 0.5 + expansion;
+    let top = expansion;
+    let bottom = -ARM_HEIGHT - expansion;
+
+    let mut positions = Vec::with_capacity(24);
+    let mut normals = Vec::with_capacity(24);
+    let mut uvs = Vec::with_capacity(24);
+    let mut indices = Vec::with_capacity(36);
+    let texture_y = if sleeve { 72.0 } else { 40.0 };
+    let cap_y = if sleeve { 64.0 } else { 32.0 };
+    let faces = [
+        (
+            [
+                [-half_x, bottom, half_z],
+                [half_x, bottom, half_z],
+                [half_x, top, half_z],
+                [-half_x, top, half_z],
+            ],
+            [0.0, 0.0, 1.0],
+            UvRect::pixels(88.0, texture_y, 8.0, 24.0),
+        ),
+        (
+            [
+                [half_x, bottom, -half_z],
+                [-half_x, bottom, -half_z],
+                [-half_x, top, -half_z],
+                [half_x, top, -half_z],
+            ],
+            [0.0, 0.0, -1.0],
+            UvRect::pixels(104.0, texture_y, 8.0, 24.0),
+        ),
+        (
+            [
+                [half_x, bottom, half_z],
+                [half_x, bottom, -half_z],
+                [half_x, top, -half_z],
+                [half_x, top, half_z],
+            ],
+            [1.0, 0.0, 0.0],
+            UvRect::pixels(80.0, texture_y, 8.0, 24.0),
+        ),
+        (
+            [
+                [-half_x, bottom, -half_z],
+                [-half_x, bottom, half_z],
+                [-half_x, top, half_z],
+                [-half_x, top, -half_z],
+            ],
+            [-1.0, 0.0, 0.0],
+            UvRect::pixels(96.0, texture_y, 8.0, 24.0),
+        ),
+        (
+            [
+                [-half_x, top, half_z],
+                [half_x, top, half_z],
+                [half_x, top, -half_z],
+                [-half_x, top, -half_z],
+            ],
+            [0.0, 1.0, 0.0],
+            UvRect::pixels(88.0, cap_y, 8.0, 8.0),
+        ),
+        (
+            [
+                [-half_x, bottom, -half_z],
+                [half_x, bottom, -half_z],
+                [half_x, bottom, half_z],
+                [-half_x, bottom, half_z],
+            ],
+            [0.0, -1.0, 0.0],
+            UvRect::pixels(96.0, cap_y, 8.0, 8.0),
+        ),
+    ];
+
+    for (face, normal, uv) in faces {
+        let start = positions.len() as u32;
+        positions.extend(face);
+        normals.extend([normal; 4]);
+        uvs.extend(uv.corners());
+        indices.extend([start, start + 1, start + 2, start + 2, start + 3, start]);
+    }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
 }
 
 #[cfg(test)]
@@ -100,13 +239,23 @@ mod tests {
 
     #[test]
     fn idle_hand_uses_stable_resting_pose() {
+        let pose = hand_pose(&MiningProgress::default());
+        assert_eq!(pose.translation, IDLE_TRANSLATION);
         assert_eq!(
-            hand_pose(&MiningProgress::default()),
-            HandPose {
-                translation: Vec2::ZERO,
-                rotation: IDLE_ROTATION,
-                scale: 1.0,
-            }
+            pose.rotation,
+            Quat::from_euler(
+                EulerRot::XYZ,
+                IDLE_ROTATION.x,
+                IDLE_ROTATION.y,
+                IDLE_ROTATION.z
+            )
         );
+    }
+
+    #[test]
+    fn arm_is_a_complete_textured_cuboid() {
+        let mesh = arm_mesh(false);
+        assert_eq!(mesh.count_vertices(), 24);
+        assert_eq!(mesh.indices().map(Indices::len), Some(36));
     }
 }

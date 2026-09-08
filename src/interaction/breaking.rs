@@ -10,7 +10,7 @@ use crate::{
     chunk::ChunkStorage,
     coordinates::WorldBlockPos,
     inventory::PlayerInventory,
-    item::{DroppedItemAssets, ItemId, ItemRegistry, ToolProperties, spawn_dropped_item},
+    item::{DroppedItemAssets, ItemId, ItemRegistry, ToolProperties, ToolType, spawn_dropped_item},
     player::Player,
     survival::{GameMode, Hunger},
 };
@@ -100,6 +100,7 @@ pub(super) fn break_selected_block(
         0.0
     } else {
         mining_duration(
+            block,
             registry.definition(block).hardness,
             settings.survival_break_time_multiplier,
             settings.break_repeat_interval,
@@ -113,7 +114,9 @@ pub(super) fn break_selected_block(
 
     if let Some(broken) = take_breakable_block(&mut storage, &registry, hit.position) {
         if *mode == GameMode::Survival {
-            if let Some(drop) = survival_drop(broken, hit.position, &item_registry) {
+            if can_harvest(broken, held_tool)
+                && let Some(drop) = survival_drop(broken, hit.position, &item_registry)
+            {
                 let stack = item_registry
                     .create_stack(drop, 1)
                     .expect("single block drops fit their item stack limit");
@@ -137,13 +140,37 @@ pub(super) fn break_selected_block(
 }
 
 fn mining_duration(
+    block: BlockId,
     hardness: f32,
     base_multiplier: f32,
     minimum: f32,
     tool: Option<ToolProperties>,
 ) -> f32 {
-    let mining_speed = tool.map_or(1.0, |properties| properties.mining_speed.max(1.0));
-    (hardness.max(0.0) * base_multiplier.max(0.0) / mining_speed).max(minimum.max(0.0))
+    let effective_tool = tool.filter(|properties| tool_is_effective(block, properties.tool_type));
+    let mining_speed = effective_tool.map_or(1.0, |properties| properties.mining_speed.max(1.0));
+    let wrong_tool_penalty = if requires_pickaxe(block) && effective_tool.is_none() {
+        2.5
+    } else {
+        1.0
+    };
+    (hardness.max(0.0) * base_multiplier.max(0.0) * wrong_tool_penalty / mining_speed)
+        .max(minimum.max(0.0))
+}
+
+fn requires_pickaxe(block: BlockId) -> bool {
+    matches!(
+        block,
+        BlockId::STONE | BlockId::COAL_ORE | BlockId::IRON_ORE
+    )
+}
+
+fn tool_is_effective(block: BlockId, tool_type: ToolType) -> bool {
+    tool_type == ToolType::Pickaxe && requires_pickaxe(block)
+}
+
+fn can_harvest(block: BlockId, tool: Option<ToolProperties>) -> bool {
+    !requires_pickaxe(block)
+        || tool.is_some_and(|properties| tool_is_effective(block, properties.tool_type))
 }
 
 #[cfg(test)]
@@ -284,12 +311,14 @@ mod tests {
         let blocks = BlockRegistry::default();
         let settings = InteractionSettings::default();
         let dirt = mining_duration(
+            BlockId::DIRT,
             blocks.definition(BlockId::DIRT).hardness,
             settings.survival_break_time_multiplier,
             settings.break_repeat_interval,
             None,
         );
         let stone = mining_duration(
+            BlockId::STONE,
             blocks.definition(BlockId::STONE).hardness,
             settings.survival_break_time_multiplier,
             settings.break_repeat_interval,
@@ -305,12 +334,14 @@ mod tests {
         let items = ItemRegistry::default();
         let settings = InteractionSettings::default();
         let hand = mining_duration(
+            BlockId::STONE,
             blocks.definition(BlockId::STONE).hardness,
             settings.survival_break_time_multiplier,
             settings.break_repeat_interval,
             None,
         );
         let pickaxe = mining_duration(
+            BlockId::STONE,
             blocks.definition(BlockId::STONE).hardness,
             settings.survival_break_time_multiplier,
             settings.break_repeat_interval,
@@ -318,5 +349,25 @@ mod tests {
         );
 
         assert!(pickaxe < hand);
+    }
+
+    #[test]
+    fn hand_breaks_soft_blocks_but_does_not_harvest_stone_or_ores() {
+        assert!(can_harvest(BlockId::DIRT, None));
+        assert!(can_harvest(BlockId::GRASS, None));
+        assert!(can_harvest(BlockId::WOOD, None));
+        assert!(!can_harvest(BlockId::STONE, None));
+        assert!(!can_harvest(BlockId::COAL_ORE, None));
+        assert!(!can_harvest(BlockId::IRON_ORE, None));
+    }
+
+    #[test]
+    fn pickaxe_harvests_stone_and_ores() {
+        let items = ItemRegistry::default();
+        let pickaxe = items.tool(ItemId::STONE_PICKAXE);
+
+        assert!(can_harvest(BlockId::STONE, pickaxe));
+        assert!(can_harvest(BlockId::COAL_ORE, pickaxe));
+        assert!(can_harvest(BlockId::IRON_ORE, pickaxe));
     }
 }

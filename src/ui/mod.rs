@@ -56,9 +56,9 @@ impl Plugin for UiPlugin {
                     inventory_panel::spawn_inventory_panel,
                     crosshair::spawn_crosshair,
                     survival_hud::spawn_survival_hud,
-                    first_person_hand::spawn_first_person_hand,
                 ),
             )
+            .add_systems(PostStartup, first_person_hand::spawn_first_person_hand)
             .add_systems(
                 Update,
                 (
