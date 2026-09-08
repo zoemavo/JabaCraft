@@ -53,6 +53,9 @@ fn create_chunk_material(
         base_color_texture: Some(atlas),
         alpha_mode: AlphaMode::Mask(0.5),
         perceptual_roughness: 0.92,
+        // Blocks are matte.  Suppressing the default dielectric highlight
+        // avoids broad plastic-looking glare on sun-facing terrain.
+        reflectance: 0.18,
         ..default()
     })));
 }

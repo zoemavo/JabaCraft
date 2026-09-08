@@ -21,7 +21,7 @@ pub struct AppPlugin;
 impl Plugin for AppPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AppMetadata>()
-            .insert_resource(ClearColor(Color::srgb(0.53, 0.72, 0.9)))
+            .insert_resource(ClearColor(Color::srgb(0.38, 0.62, 0.88)))
             .add_systems(Startup, log_startup);
     }
 }
