@@ -408,8 +408,8 @@ mod tests {
         assert_ne!(top, bottom);
         assert_ne!(top, side);
         assert_ne!(bottom, side);
-        assert_eq!(top[0], [16.5 / 64.0, 15.5 / 64.0]);
-        assert_eq!(bottom[0], [32.5 / 64.0, 15.5 / 64.0]);
-        assert_eq!(side[0], [48.5 / 64.0, 15.5 / 64.0]);
+        assert_eq!(top[0], [32.5 / 128.0, 31.5 / 128.0]);
+        assert_eq!(bottom[0], [64.5 / 128.0, 31.5 / 128.0]);
+        assert_eq!(side[0], [96.5 / 128.0, 31.5 / 128.0]);
     }
 }
