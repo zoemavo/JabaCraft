@@ -9,9 +9,10 @@ use crate::{interaction::MiningProgress, inventory::InventoryState, player::Play
 const ARM_WIDTH: f32 = 0.15;
 const ARM_HEIGHT: f32 = 0.45;
 const ARM_DEPTH: f32 = 0.15;
-// The pivot is the shoulder: it stays beside the hotbar while the arm extends
-// diagonally toward the middle of the screen.
-const IDLE_TRANSLATION: Vec3 = Vec3::new(0.42, -0.43, -1.12);
+const SLEEVE_HEIGHT: f32 = ARM_HEIGHT / 3.0;
+const FOREARM_HEIGHT: f32 = ARM_HEIGHT - SLEEVE_HEIGHT;
+// The shoulder stays beside the hotbar. Sleeve and forearm use separate depths.
+const IDLE_TRANSLATION: Vec3 = Vec3::new(0.42, -0.43, -0.82);
 const IDLE_ROTATION: Vec3 = Vec3::new(0.35, -0.45, -2.62);
 
 #[derive(Component)]
@@ -57,6 +58,7 @@ pub(super) fn spawn_first_person_hand(
                     Name::new("Steve Right Arm"),
                     Mesh3d(base_mesh),
                     MeshMaterial3d(base_material),
+                    Transform::from_translation(Vec3::new(0.0, -SLEEVE_HEIGHT, -0.16)),
                 ));
                 pivot.spawn((
                     Name::new("Steve Right Sleeve"),
@@ -144,14 +146,20 @@ fn arm_mesh(sleeve: bool) -> Mesh {
     let expansion = if sleeve { 0.008 } else { 0.0 };
     let half_x = ARM_WIDTH * 0.5 + expansion;
     let half_z = ARM_DEPTH * 0.5 + expansion;
+    let segment_height = if sleeve {
+        SLEEVE_HEIGHT
+    } else {
+        FOREARM_HEIGHT
+    };
     let top = expansion;
-    let bottom = -ARM_HEIGHT - expansion;
+    let bottom = -segment_height - expansion;
 
     let mut positions = Vec::with_capacity(24);
     let mut normals = Vec::with_capacity(24);
     let mut uvs = Vec::with_capacity(24);
     let mut indices = Vec::with_capacity(36);
-    let texture_y = if sleeve { 72.0 } else { 40.0 };
+    let texture_y = if sleeve { 72.0 } else { 48.0 };
+    let texture_height = if sleeve { 8.0 } else { 16.0 };
     let cap_y = if sleeve { 64.0 } else { 32.0 };
     let faces = [
         (
@@ -162,7 +170,7 @@ fn arm_mesh(sleeve: bool) -> Mesh {
                 [-half_x, top, half_z],
             ],
             [0.0, 0.0, 1.0],
-            UvRect::pixels(88.0, texture_y, 8.0, 24.0),
+            UvRect::pixels(88.0, texture_y, 8.0, texture_height),
         ),
         (
             [
@@ -172,7 +180,7 @@ fn arm_mesh(sleeve: bool) -> Mesh {
                 [half_x, top, -half_z],
             ],
             [0.0, 0.0, -1.0],
-            UvRect::pixels(104.0, texture_y, 8.0, 24.0),
+            UvRect::pixels(104.0, texture_y, 8.0, texture_height),
         ),
         (
             [
@@ -182,7 +190,7 @@ fn arm_mesh(sleeve: bool) -> Mesh {
                 [half_x, top, half_z],
             ],
             [1.0, 0.0, 0.0],
-            UvRect::pixels(80.0, texture_y, 8.0, 24.0),
+            UvRect::pixels(80.0, texture_y, 8.0, texture_height),
         ),
         (
             [
@@ -192,7 +200,7 @@ fn arm_mesh(sleeve: bool) -> Mesh {
                 [-half_x, top, -half_z],
             ],
             [-1.0, 0.0, 0.0],
-            UvRect::pixels(96.0, texture_y, 8.0, 24.0),
+            UvRect::pixels(96.0, texture_y, 8.0, texture_height),
         ),
         (
             [
