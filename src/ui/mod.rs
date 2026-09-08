@@ -1,6 +1,7 @@
 //! HUD and user-interface systems.
 
 mod crosshair;
+mod first_person_hand;
 mod inventory_panel;
 mod item_icons;
 mod survival_hud;
@@ -55,6 +56,7 @@ impl Plugin for UiPlugin {
                     inventory_panel::spawn_inventory_panel,
                     crosshair::spawn_crosshair,
                     survival_hud::spawn_survival_hud,
+                    first_person_hand::spawn_first_person_hand,
                 ),
             )
             .add_systems(Update, inventory_panel::handle_inventory_clicks)
@@ -67,6 +69,7 @@ impl Plugin for UiPlugin {
                     inventory_panel::sync_item_tooltip,
                     crosshair::sync_crosshair_visibility,
                     survival_hud::sync_survival_hud,
+                    first_person_hand::sync_first_person_hand,
                 ),
             );
     }

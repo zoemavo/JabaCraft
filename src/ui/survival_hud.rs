@@ -9,7 +9,7 @@ use crate::{
 const ICON_COUNT: usize = 10;
 const ICON_SIZE: f32 = 27.0;
 const HOTBAR_TOP_OFFSET: f32 = 90.0;
-const HUD_WIDTH: f32 = 546.0;
+const HUD_WIDTH: f32 = 600.0;
 
 #[derive(Component)]
 pub(super) struct SurvivalHudRoot;

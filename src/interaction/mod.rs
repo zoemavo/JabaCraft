@@ -17,6 +17,42 @@ pub use raycast::{VoxelRaycastHit, voxel_raycast};
 #[derive(Debug, Default, Resource)]
 pub struct CameraRaycast(pub Option<VoxelRaycastHit>);
 
+/// Presentation state shared with the first-person hand animation.
+#[derive(Debug, Default, Resource)]
+pub struct MiningProgress {
+    active: bool,
+    normalized: f32,
+    elapsed: f32,
+}
+
+impl MiningProgress {
+    pub const fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub const fn normalized(&self) -> f32 {
+        self.normalized
+    }
+
+    pub const fn elapsed(&self) -> f32 {
+        self.elapsed
+    }
+
+    fn update(&mut self, elapsed: f32, required: f32) {
+        self.active = true;
+        self.elapsed = elapsed.max(0.0);
+        self.normalized = if required <= 0.0 {
+            1.0
+        } else {
+            (elapsed / required).clamp(0.0, 1.0)
+        };
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Configuration for future block-selection raycasts.
 #[derive(Debug, Resource)]
 pub struct InteractionSettings {
@@ -47,6 +83,7 @@ impl Plugin for InteractionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InteractionSettings>()
             .init_resource::<CameraRaycast>()
+            .init_resource::<MiningProgress>()
             .init_resource::<breaking::BlockBreakInput>()
             .init_resource::<placing::BlockPlaceInput>()
             .init_gizmo_group::<outline::BlockOutlineGizmos>()

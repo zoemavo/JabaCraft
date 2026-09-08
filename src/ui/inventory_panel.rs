@@ -11,10 +11,10 @@ const SLOT_SIZE: f32 = 36.0 * UI_SCALE;
 const ICON_SIZE: f32 = 32.0 * UI_SCALE;
 const GRID_WIDTH: f32 = SLOT_SIZE * HOTBAR_SLOT_COUNT as f32;
 const PANEL_WIDTH: f32 = 352.0 * UI_SCALE;
-const PANEL_HEIGHT: f32 = 187.0 * UI_SCALE;
+const PANEL_HEIGHT: f32 = 332.0 * UI_SCALE;
 const GRID_LEFT: f32 = 14.0 * UI_SCALE;
-const STORAGE_TOP: f32 = 21.0 * UI_SCALE;
-const HOTBAR_TOP: f32 = 139.0 * UI_SCALE;
+const STORAGE_TOP: f32 = 166.0 * UI_SCALE;
+const HOTBAR_TOP: f32 = 282.0 * UI_SCALE;
 const HOVER_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.32);
 const EMPTY_COLOR: Color = Color::srgb(0.10, 0.11, 0.13);
 
@@ -75,21 +75,7 @@ pub(super) fn spawn_inventory_panel(mut commands: Commands, asset_server: Res<As
                     },
                 ))
                 .with_children(|panel| {
-                    panel.spawn((
-                        Name::new("Inventory Title"),
-                        Text::new("Inventory"),
-                        TextFont {
-                            font_size: FontSize::Px(14.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgb(0.24, 0.24, 0.24)),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: Val::Px(GRID_LEFT),
-                            top: Val::Px(5.0 * UI_SCALE),
-                            ..default()
-                        },
-                    ));
+                    spawn_player_preview(panel, &asset_server);
                     spawn_slot_grid(
                         panel,
                         "Inventory Storage Grid",
@@ -187,6 +173,128 @@ pub(super) fn spawn_inventory_panel(mut commands: Commands, asset_server: Res<As
                 color: Color::BLACK,
             },
         ));
+}
+
+fn spawn_player_preview(parent: &mut ChildSpawnerCommands, assets: &AssetServer) {
+    let skin = assets.load("ui/steve.png");
+    parent
+        .spawn((
+            Name::new("Player Preview"),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(50.0 * UI_SCALE),
+                top: Val::Px(16.0 * UI_SCALE),
+                width: Val::Px(100.0 * UI_SCALE),
+                height: Val::Px(140.0 * UI_SCALE),
+                ..default()
+            },
+        ))
+        .with_children(|preview| {
+            spawn_skin_part(
+                preview,
+                &skin,
+                "Head",
+                Rect::from_corners(Vec2::new(16.0, 16.0), Vec2::new(32.0, 32.0)),
+                Some(Rect::from_corners(
+                    Vec2::new(80.0, 16.0),
+                    Vec2::new(96.0, 32.0),
+                )),
+                [34.0, 4.0, 32.0, 32.0],
+            );
+            spawn_skin_part(
+                preview,
+                &skin,
+                "Body",
+                Rect::from_corners(Vec2::new(40.0, 40.0), Vec2::new(56.0, 64.0)),
+                Some(Rect::from_corners(
+                    Vec2::new(40.0, 72.0),
+                    Vec2::new(56.0, 96.0),
+                )),
+                [34.0, 36.0, 32.0, 48.0],
+            );
+            spawn_skin_part(
+                preview,
+                &skin,
+                "Right Arm",
+                Rect::from_corners(Vec2::new(88.0, 40.0), Vec2::new(96.0, 64.0)),
+                Some(Rect::from_corners(
+                    Vec2::new(88.0, 72.0),
+                    Vec2::new(96.0, 96.0),
+                )),
+                [18.0, 36.0, 16.0, 48.0],
+            );
+            spawn_skin_part(
+                preview,
+                &skin,
+                "Left Arm",
+                Rect::from_corners(Vec2::new(72.0, 104.0), Vec2::new(80.0, 128.0)),
+                Some(Rect::from_corners(
+                    Vec2::new(104.0, 104.0),
+                    Vec2::new(112.0, 128.0),
+                )),
+                [66.0, 36.0, 16.0, 48.0],
+            );
+            spawn_skin_part(
+                preview,
+                &skin,
+                "Right Leg",
+                Rect::from_corners(Vec2::new(8.0, 40.0), Vec2::new(16.0, 64.0)),
+                Some(Rect::from_corners(
+                    Vec2::new(8.0, 72.0),
+                    Vec2::new(16.0, 96.0),
+                )),
+                [34.0, 84.0, 16.0, 48.0],
+            );
+            spawn_skin_part(
+                preview,
+                &skin,
+                "Left Leg",
+                Rect::from_corners(Vec2::new(40.0, 104.0), Vec2::new(48.0, 128.0)),
+                Some(Rect::from_corners(
+                    Vec2::new(8.0, 104.0),
+                    Vec2::new(16.0, 128.0),
+                )),
+                [50.0, 84.0, 16.0, 48.0],
+            );
+        });
+}
+
+fn spawn_skin_part(
+    parent: &mut ChildSpawnerCommands,
+    skin: &Handle<Image>,
+    name: &'static str,
+    base_rect: Rect,
+    overlay_rect: Option<Rect>,
+    [left, top, width, height]: [f32; 4],
+) {
+    let node = || Node {
+        position_type: PositionType::Absolute,
+        left: Val::Px(left * UI_SCALE),
+        top: Val::Px(top * UI_SCALE),
+        width: Val::Px(width * UI_SCALE),
+        height: Val::Px(height * UI_SCALE),
+        ..default()
+    };
+    parent.spawn((
+        Name::new(format!("Player {name}")),
+        ImageNode {
+            image: skin.clone(),
+            rect: Some(base_rect),
+            ..default()
+        },
+        node(),
+    ));
+    if let Some(rect) = overlay_rect {
+        parent.spawn((
+            Name::new(format!("Player {name} Overlay")),
+            ImageNode {
+                image: skin.clone(),
+                rect: Some(rect),
+                ..default()
+            },
+            node(),
+        ));
+    }
 }
 
 fn spawn_slot_grid(

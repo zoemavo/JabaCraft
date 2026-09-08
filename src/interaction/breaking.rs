@@ -15,7 +15,7 @@ use crate::{
     survival::{GameMode, Hunger},
 };
 
-use super::{CameraRaycast, InteractionSettings};
+use super::{CameraRaycast, InteractionSettings, MiningProgress};
 
 #[derive(Debug, Default, Resource)]
 pub(super) struct BlockBreakInput {
@@ -46,6 +46,7 @@ pub(super) fn break_selected_block(
     mut hunger: Single<&mut Hunger, With<Player>>,
     mut selected: ResMut<CameraRaycast>,
     mut input: ResMut<BlockBreakInput>,
+    mut mining_progress: ResMut<MiningProgress>,
 ) {
     let cursor_captured = cursor.grab_mode != CursorGrabMode::None;
     let pressed = mouse_buttons.pressed(MouseButton::Left);
@@ -56,23 +57,28 @@ pub(super) fn break_selected_block(
     if !pressed {
         input.suppress_until_release = false;
         input.reset_progress();
+        mining_progress.reset();
         return;
     }
     if !cursor_captured || input.suppress_until_release {
         input.reset_progress();
+        mining_progress.reset();
         return;
     }
 
     let Some(hit) = selected.0 else {
         input.reset_progress();
+        mining_progress.reset();
         return;
     };
     let Some(block) = storage.get_block(hit.position) else {
         input.reset_progress();
+        mining_progress.reset();
         return;
     };
     if block == BlockId::AIR || !registry.is_breakable(block) {
         input.reset_progress();
+        mining_progress.reset();
         return;
     }
 
@@ -87,6 +93,7 @@ pub(super) fn break_selected_block(
         (registry.definition(block).hardness * settings.survival_break_time_multiplier)
             .max(settings.break_repeat_interval)
     };
+    mining_progress.update(input.elapsed, required);
     if input.elapsed < required {
         return;
     }
@@ -107,6 +114,7 @@ pub(super) fn break_selected_block(
         );
         selected.0 = None;
         input.reset_progress();
+        mining_progress.reset();
     }
 }
 
