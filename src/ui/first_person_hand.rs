@@ -9,10 +9,9 @@ use crate::{interaction::MiningProgress, inventory::InventoryState, player::Play
 const ARM_WIDTH: f32 = 0.15;
 const ARM_HEIGHT: f32 = 0.45;
 const ARM_DEPTH: f32 = 0.15;
-const SLEEVE_HEIGHT: f32 = ARM_HEIGHT / 3.0;
-const FOREARM_HEIGHT: f32 = ARM_HEIGHT - SLEEVE_HEIGHT;
-// The shoulder stays beside the hotbar. Sleeve and forearm use separate depths.
-const IDLE_TRANSLATION: Vec3 = Vec3::new(0.42, -0.43, -0.82);
+// One continuous cuboid: the skin texture itself contains the cyan sleeve
+// section and the skin section, so perspective comes from this single mesh.
+const IDLE_TRANSLATION: Vec3 = Vec3::new(0.42, -0.43, -1.12);
 const IDLE_ROTATION: Vec3 = Vec3::new(0.35, -0.45, -2.62);
 
 #[derive(Component)]
@@ -33,8 +32,7 @@ pub(super) fn spawn_first_person_hand(
         depth_bias: 10_000.0,
         ..default()
     });
-    let base_mesh = meshes.add(arm_mesh(false));
-    let sleeve_mesh = meshes.add(arm_mesh(true));
+    let arm_mesh = meshes.add(arm_mesh());
     let pose = hand_pose(&MiningProgress::default());
 
     commands.entity(*camera).with_children(|camera| {
@@ -48,14 +46,8 @@ pub(super) fn spawn_first_person_hand(
             .with_children(|pivot| {
                 pivot.spawn((
                     Name::new("Steve Right Arm"),
-                    Mesh3d(base_mesh),
-                    MeshMaterial3d(base_material.clone()),
-                    Transform::from_translation(Vec3::new(0.0, -SLEEVE_HEIGHT, -0.16)),
-                ));
-                pivot.spawn((
-                    Name::new("Steve Right Sleeve"),
-                    Mesh3d(sleeve_mesh),
-                    MeshMaterial3d(base_material.clone()),
+                    Mesh3d(arm_mesh),
+                    MeshMaterial3d(base_material),
                 ));
             });
     });
@@ -134,24 +126,18 @@ impl UvRect {
     }
 }
 
-fn arm_mesh(sleeve: bool) -> Mesh {
-    let expansion = if sleeve { 0.008 } else { 0.0 };
-    let half_x = ARM_WIDTH * 0.5 + expansion;
-    let half_z = ARM_DEPTH * 0.5 + expansion;
-    let segment_height = if sleeve {
-        SLEEVE_HEIGHT
-    } else {
-        FOREARM_HEIGHT
-    };
-    let top = expansion;
-    let bottom = -segment_height - expansion;
+fn arm_mesh() -> Mesh {
+    let half_x = ARM_WIDTH * 0.5;
+    let half_z = ARM_DEPTH * 0.5;
+    let top = 0.0;
+    let bottom = -ARM_HEIGHT;
 
     let mut positions = Vec::with_capacity(24);
     let mut normals = Vec::with_capacity(24);
     let mut uvs = Vec::with_capacity(24);
     let mut indices = Vec::with_capacity(36);
-    let texture_y = if sleeve { 40.0 } else { 48.0 };
-    let texture_height = if sleeve { 8.0 } else { 16.0 };
+    let texture_y = 40.0;
+    let texture_height = 24.0;
     let cap_y = 32.0;
     let faces = [
         (
@@ -256,7 +242,7 @@ mod tests {
 
     #[test]
     fn arm_is_a_complete_textured_cuboid() {
-        let mesh = arm_mesh(false);
+        let mesh = arm_mesh();
         assert_eq!(mesh.count_vertices(), 24);
         assert_eq!(mesh.indices().map(Indices::len), Some(36));
     }
