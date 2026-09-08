@@ -1,5 +1,7 @@
 use std::f32::consts::PI;
 
+use bevy::camera::visibility::RenderLayers;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::{
     asset::RenderAssetUsages, mesh::Indices, prelude::*, render::render_resource::PrimitiveTopology,
 };
@@ -11,9 +13,10 @@ const ARM_HEIGHT: f32 = 0.62;
 const ARM_DEPTH: f32 = 0.18;
 
 // Camera-local first-person viewmodel tuning.
-const VIEWMODEL_HAND_TRANSLATION: Vec3 = Vec3::new(0.72, -0.70, -1.22);
+const VIEWMODEL_HAND_TRANSLATION: Vec3 = Vec3::new(0.72, -0.50, -0.72);
 const VIEWMODEL_HAND_ROTATION: Vec3 = Vec3::new(-0.50, -0.65, -0.42);
-const VIEWMODEL_HAND_SCALE: Vec3 = Vec3::splat(0.64);
+const VIEWMODEL_HAND_SCALE: Vec3 = Vec3::splat(1.10);
+const VIEWMODEL_FOV: f32 = 60.0;
 // The mesh is authored with its long axis pointing down; this local asset
 // rotation lets the runtime transform stay in the usual Minecraft-like range.
 const VIEWMODEL_MESH_ROTATION: f32 = -1.92;
@@ -42,19 +45,40 @@ pub(super) fn spawn_first_person_hand(
     commands.entity(*camera).with_children(|camera| {
         camera
             .spawn((
-                Name::new("First Person Hand Root"),
-                FirstPersonHandRoot,
-                Transform::from_translation(pose.translation)
-                    .with_rotation(pose.rotation)
-                    .with_scale(pose.scale),
-                Visibility::Inherited,
+                Name::new("First Person Viewmodel Camera"),
+                Camera3d::default(),
+                Camera {
+                    order: 1,
+                    clear_color: ClearColorConfig::None,
+                    ..default()
+                },
+                Projection::from(PerspectiveProjection {
+                    fov: VIEWMODEL_FOV.to_radians(),
+                    ..default()
+                }),
+                Tonemapping::None,
+                RenderLayers::layer(1),
+                Transform::default(),
             ))
-            .with_children(|pivot| {
-                pivot.spawn((
-                    Name::new("Steve Right Arm"),
-                    Mesh3d(arm_mesh),
-                    MeshMaterial3d(base_material),
-                ));
+            .with_children(|viewmodel_camera| {
+                viewmodel_camera
+                    .spawn((
+                        Name::new("First Person Hand Root"),
+                        FirstPersonHandRoot,
+                        RenderLayers::layer(1),
+                        Transform::from_translation(pose.translation)
+                            .with_rotation(pose.rotation)
+                            .with_scale(pose.scale),
+                        Visibility::Inherited,
+                    ))
+                    .with_children(|pivot| {
+                        pivot.spawn((
+                            Name::new("Steve Right Arm"),
+                            Mesh3d(arm_mesh),
+                            MeshMaterial3d(base_material),
+                            RenderLayers::layer(1),
+                        ));
+                    });
             });
     });
 }
