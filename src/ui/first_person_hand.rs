@@ -6,13 +6,17 @@ use bevy::{
 
 use crate::{interaction::MiningProgress, inventory::InventoryState, player::PlayerCamera};
 
-const ARM_WIDTH: f32 = 0.15;
-const ARM_HEIGHT: f32 = 0.45;
-const ARM_DEPTH: f32 = 0.15;
-// One continuous cuboid: the skin texture itself contains the cyan sleeve
-// section and the skin section, so perspective comes from this single mesh.
-const IDLE_TRANSLATION: Vec3 = Vec3::new(0.42, -0.43, -1.12);
-const IDLE_ROTATION: Vec3 = Vec3::new(0.35, -0.45, -2.62);
+const ARM_WIDTH: f32 = 0.18;
+const ARM_HEIGHT: f32 = 0.62;
+const ARM_DEPTH: f32 = 0.18;
+
+// Camera-local first-person viewmodel tuning.
+const VIEWMODEL_HAND_TRANSLATION: Vec3 = Vec3::new(0.72, -0.70, -1.22);
+const VIEWMODEL_HAND_ROTATION: Vec3 = Vec3::new(-0.50, -0.65, -0.42);
+const VIEWMODEL_HAND_SCALE: Vec3 = Vec3::splat(0.64);
+// The mesh is authored with its long axis pointing down; this local asset
+// rotation lets the runtime transform stay in the usual Minecraft-like range.
+const VIEWMODEL_MESH_ROTATION: f32 = -1.92;
 
 #[derive(Component)]
 pub(super) struct FirstPersonHandRoot;
@@ -40,7 +44,9 @@ pub(super) fn spawn_first_person_hand(
             .spawn((
                 Name::new("First Person Hand Root"),
                 FirstPersonHandRoot,
-                Transform::from_translation(pose.translation).with_rotation(pose.rotation),
+                Transform::from_translation(pose.translation)
+                    .with_rotation(pose.rotation)
+                    .with_scale(pose.scale),
                 Visibility::Inherited,
             ))
             .with_children(|pivot| {
@@ -67,24 +73,27 @@ pub(super) fn sync_first_person_hand(
     let pose = hand_pose(&mining);
     hand.0.translation = pose.translation;
     hand.0.rotation = pose.rotation;
+    hand.0.scale = pose.scale;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct HandPose {
     translation: Vec3,
     rotation: Quat,
+    scale: Vec3,
 }
 
 fn hand_pose(mining: &MiningProgress) -> HandPose {
     if !mining.is_active() {
         return HandPose {
-            translation: IDLE_TRANSLATION,
+            translation: VIEWMODEL_HAND_TRANSLATION,
             rotation: Quat::from_euler(
                 EulerRot::XYZ,
-                IDLE_ROTATION.x,
-                IDLE_ROTATION.y,
-                IDLE_ROTATION.z,
+                VIEWMODEL_HAND_ROTATION.x,
+                VIEWMODEL_HAND_ROTATION.y,
+                VIEWMODEL_HAND_ROTATION.z,
             ),
+            scale: VIEWMODEL_HAND_SCALE,
         };
     }
 
@@ -92,13 +101,15 @@ fn hand_pose(mining: &MiningProgress) -> HandPose {
     let swing = (phase * PI).sin();
     let follow_through = (phase * PI * 2.0).sin();
     HandPose {
-        translation: IDLE_TRANSLATION + Vec3::new(-0.03 * swing, 0.02 * swing, -0.04 * swing),
+        translation: VIEWMODEL_HAND_TRANSLATION
+            + Vec3::new(-0.025 * swing, 0.02 * swing, -0.04 * swing),
         rotation: Quat::from_euler(
             EulerRot::XYZ,
-            IDLE_ROTATION.x + 0.85 * swing,
-            IDLE_ROTATION.y + 0.22 * swing,
-            IDLE_ROTATION.z + 0.16 * follow_through,
+            VIEWMODEL_HAND_ROTATION.x + 0.30 * swing,
+            VIEWMODEL_HAND_ROTATION.y + 0.16 * swing,
+            VIEWMODEL_HAND_ROTATION.z + 0.12 * follow_through,
         ),
+        scale: VIEWMODEL_HAND_SCALE,
     }
 }
 
@@ -204,8 +215,10 @@ fn arm_mesh() -> Mesh {
 
     for (face, normal, uv) in faces {
         let start = positions.len() as u32;
-        positions.extend(face);
-        normals.extend([normal; 4]);
+        let model_rotation = Quat::from_rotation_z(VIEWMODEL_MESH_ROTATION);
+        positions.extend(face.map(|vertex| (model_rotation * Vec3::from_array(vertex)).to_array()));
+        let oriented_normal = (model_rotation * Vec3::from_array(normal)).to_array();
+        normals.extend([oriented_normal; 4]);
         uvs.extend(uv.corners());
         indices.extend([start, start + 1, start + 2, start + 2, start + 3, start]);
     }
@@ -228,16 +241,17 @@ mod tests {
     #[test]
     fn idle_hand_uses_stable_resting_pose() {
         let pose = hand_pose(&MiningProgress::default());
-        assert_eq!(pose.translation, IDLE_TRANSLATION);
+        assert_eq!(pose.translation, VIEWMODEL_HAND_TRANSLATION);
         assert_eq!(
             pose.rotation,
             Quat::from_euler(
                 EulerRot::XYZ,
-                IDLE_ROTATION.x,
-                IDLE_ROTATION.y,
-                IDLE_ROTATION.z
+                VIEWMODEL_HAND_ROTATION.x,
+                VIEWMODEL_HAND_ROTATION.y,
+                VIEWMODEL_HAND_ROTATION.z
             )
         );
+        assert_eq!(pose.scale, VIEWMODEL_HAND_SCALE);
     }
 
     #[test]
