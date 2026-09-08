@@ -33,14 +33,6 @@ pub(super) fn spawn_first_person_hand(
         depth_bias: 10_000.0,
         ..default()
     });
-    let sleeve_material = materials.add(StandardMaterial {
-        base_color_texture: Some(skin),
-        unlit: true,
-        alpha_mode: AlphaMode::Mask(0.1),
-        perceptual_roughness: 1.0,
-        depth_bias: 10_001.0,
-        ..default()
-    });
     let base_mesh = meshes.add(arm_mesh(false));
     let sleeve_mesh = meshes.add(arm_mesh(true));
     let pose = hand_pose(&MiningProgress::default());
@@ -57,13 +49,13 @@ pub(super) fn spawn_first_person_hand(
                 pivot.spawn((
                     Name::new("Steve Right Arm"),
                     Mesh3d(base_mesh),
-                    MeshMaterial3d(base_material),
+                    MeshMaterial3d(base_material.clone()),
                     Transform::from_translation(Vec3::new(0.0, -SLEEVE_HEIGHT, -0.16)),
                 ));
                 pivot.spawn((
                     Name::new("Steve Right Sleeve"),
                     Mesh3d(sleeve_mesh),
-                    MeshMaterial3d(sleeve_material),
+                    MeshMaterial3d(base_material.clone()),
                 ));
             });
     });
@@ -158,9 +150,9 @@ fn arm_mesh(sleeve: bool) -> Mesh {
     let mut normals = Vec::with_capacity(24);
     let mut uvs = Vec::with_capacity(24);
     let mut indices = Vec::with_capacity(36);
-    let texture_y = if sleeve { 72.0 } else { 48.0 };
+    let texture_y = if sleeve { 40.0 } else { 48.0 };
     let texture_height = if sleeve { 8.0 } else { 16.0 };
-    let cap_y = if sleeve { 64.0 } else { 32.0 };
+    let cap_y = 32.0;
     let faces = [
         (
             [
