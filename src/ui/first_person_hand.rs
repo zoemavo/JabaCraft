@@ -8,14 +8,15 @@ use bevy::{
 
 use crate::{interaction::MiningProgress, inventory::InventoryState, player::PlayerCamera};
 
-const ARM_WIDTH: f32 = 0.18;
+const ARM_WIDTH: f32 = 0.22;
 const ARM_HEIGHT: f32 = 0.62;
-const ARM_DEPTH: f32 = 0.18;
+const ARM_DEPTH: f32 = 0.30;
+const SLEEVE_HEIGHT: f32 = ARM_HEIGHT * (8.0 / 12.0);
 
 // Camera-local first-person viewmodel tuning.
-const VIEWMODEL_HAND_TRANSLATION: Vec3 = Vec3::new(0.72, -0.50, -0.72);
-const VIEWMODEL_HAND_ROTATION: Vec3 = Vec3::new(-0.50, -0.65, -0.42);
-const VIEWMODEL_HAND_SCALE: Vec3 = Vec3::splat(1.10);
+const VIEWMODEL_HAND_TRANSLATION: Vec3 = Vec3::new(0.60, -0.48, -0.72);
+const VIEWMODEL_HAND_ROTATION: Vec3 = Vec3::new(-0.85, -1.18, -0.42);
+const VIEWMODEL_HAND_SCALE: Vec3 = Vec3::splat(0.84);
 const VIEWMODEL_FOV: f32 = 60.0;
 // The mesh is authored with its long axis pointing down; this local asset
 // rotation lets the runtime transform stay in the usual Minecraft-like range.
@@ -34,7 +35,6 @@ pub(super) fn spawn_first_person_hand(
     let skin = assets.load("ui/steve.png");
     let base_material = materials.add(StandardMaterial {
         base_color_texture: Some(skin.clone()),
-        unlit: true,
         perceptual_roughness: 1.0,
         depth_bias: 10_000.0,
         ..default()
@@ -61,6 +61,19 @@ pub(super) fn spawn_first_person_hand(
                 Transform::default(),
             ))
             .with_children(|viewmodel_camera| {
+                // The hand is rendered on its own layer.  Give that layer a
+                // small camera-local key light so the cube's faces remain
+                // visibly three-dimensional without changing world lighting.
+                viewmodel_camera.spawn((
+                    Name::new("First Person Viewmodel Key Light"),
+                    DirectionalLight {
+                        illuminance: 700.0,
+                        shadow_maps_enabled: false,
+                        ..default()
+                    },
+                    RenderLayers::layer(1),
+                    Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, -0.7, 0.0)),
+                ));
                 viewmodel_camera
                     .spawn((
                         Name::new("First Person Hand Root"),
@@ -162,90 +175,35 @@ impl UvRect {
 }
 
 fn arm_mesh() -> Mesh {
-    let half_x = ARM_WIDTH * 0.5;
-    let half_z = ARM_DEPTH * 0.5;
-    let top = 0.0;
-    let bottom = -ARM_HEIGHT;
+    let mut positions = Vec::with_capacity(48);
+    let mut normals = Vec::with_capacity(48);
+    let mut uvs = Vec::with_capacity(48);
+    let mut indices = Vec::with_capacity(72);
 
-    let mut positions = Vec::with_capacity(24);
-    let mut normals = Vec::with_capacity(24);
-    let mut uvs = Vec::with_capacity(24);
-    let mut indices = Vec::with_capacity(36);
-    let texture_y = 40.0;
-    let texture_height = 24.0;
-    let cap_y = 32.0;
-    let faces = [
-        (
-            [
-                [-half_x, bottom, half_z],
-                [half_x, bottom, half_z],
-                [half_x, top, half_z],
-                [-half_x, top, half_z],
-            ],
-            [0.0, 0.0, 1.0],
-            UvRect::pixels(88.0, texture_y, 8.0, texture_height),
-        ),
-        (
-            [
-                [half_x, bottom, -half_z],
-                [-half_x, bottom, -half_z],
-                [-half_x, top, -half_z],
-                [half_x, top, -half_z],
-            ],
-            [0.0, 0.0, -1.0],
-            UvRect::pixels(104.0, texture_y, 8.0, texture_height),
-        ),
-        (
-            [
-                [half_x, bottom, half_z],
-                [half_x, bottom, -half_z],
-                [half_x, top, -half_z],
-                [half_x, top, half_z],
-            ],
-            [1.0, 0.0, 0.0],
-            UvRect::pixels(80.0, texture_y, 8.0, texture_height),
-        ),
-        (
-            [
-                [-half_x, bottom, -half_z],
-                [-half_x, bottom, half_z],
-                [-half_x, top, half_z],
-                [-half_x, top, -half_z],
-            ],
-            [-1.0, 0.0, 0.0],
-            UvRect::pixels(96.0, texture_y, 8.0, texture_height),
-        ),
-        (
-            [
-                [-half_x, top, half_z],
-                [half_x, top, half_z],
-                [half_x, top, -half_z],
-                [-half_x, top, -half_z],
-            ],
-            [0.0, 1.0, 0.0],
-            UvRect::pixels(88.0, cap_y, 8.0, 8.0),
-        ),
-        (
-            [
-                [-half_x, bottom, -half_z],
-                [half_x, bottom, -half_z],
-                [half_x, bottom, half_z],
-                [-half_x, bottom, half_z],
-            ],
-            [0.0, -1.0, 0.0],
-            UvRect::pixels(96.0, cap_y, 8.0, 8.0),
-        ),
-    ];
-
-    for (face, normal, uv) in faces {
-        let start = positions.len() as u32;
-        let model_rotation = Quat::from_rotation_z(VIEWMODEL_MESH_ROTATION);
-        positions.extend(face.map(|vertex| (model_rotation * Vec3::from_array(vertex)).to_array()));
-        let oriented_normal = (model_rotation * Vec3::from_array(normal)).to_array();
-        normals.extend([oriented_normal; 4]);
-        uvs.extend(uv.corners());
-        indices.extend([start, start + 1, start + 2, start + 2, start + 3, start]);
-    }
+    // Base layer: the complete 4x12x4 arm, including the visible hand.
+    append_cuboid(
+        &mut positions,
+        &mut normals,
+        &mut uvs,
+        &mut indices,
+        ARM_WIDTH,
+        ARM_HEIGHT,
+        0.0,
+        UvRect::pixels(88.0, 40.0, 8.0, 24.0),
+    );
+    // Outer layer: a slightly larger 4x8x4 shirt sleeve. It overlaps the
+    // base mesh at the shoulder, so the first-person arm remains one
+    // continuous model while retaining the classic Steve silhouette.
+    append_cuboid(
+        &mut positions,
+        &mut normals,
+        &mut uvs,
+        &mut indices,
+        ARM_WIDTH * 1.08,
+        SLEEVE_HEIGHT,
+        0.0,
+        UvRect::pixels(72.0, 40.0, 8.0, 24.0),
+    );
 
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -256,6 +214,109 @@ fn arm_mesh() -> Mesh {
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_indices(Indices::U32(indices));
     mesh
+}
+
+fn append_cuboid(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    uvs: &mut Vec<[f32; 2]>,
+    indices: &mut Vec<u32>,
+    width: f32,
+    height: f32,
+    top: f32,
+    side_uv: UvRect,
+) {
+    let half_x = width * 0.5;
+    let half_z = ARM_DEPTH * (width / ARM_WIDTH) * 0.5;
+    let bottom = top - height;
+    let cap_y = side_uv.min.y * 128.0 - 8.0;
+    let faces = [
+        (
+            [
+                [-half_x, bottom, half_z],
+                [half_x, bottom, half_z],
+                [half_x, top, half_z],
+                [-half_x, top, half_z],
+            ],
+            [0.0, 0.0, 1.0],
+            side_uv,
+        ),
+        (
+            [
+                [half_x, bottom, -half_z],
+                [-half_x, bottom, -half_z],
+                [-half_x, top, -half_z],
+                [half_x, top, -half_z],
+            ],
+            [0.0, 0.0, -1.0],
+            UvRect::pixels(
+                side_uv.min.x + 16.0,
+                side_uv.min.y,
+                8.0,
+                side_uv.max.y * 128.0 - side_uv.min.y * 128.0,
+            ),
+        ),
+        (
+            [
+                [half_x, bottom, half_z],
+                [half_x, bottom, -half_z],
+                [half_x, top, -half_z],
+                [half_x, top, half_z],
+            ],
+            [1.0, 0.0, 0.0],
+            UvRect::pixels(
+                side_uv.min.x - 8.0,
+                side_uv.min.y,
+                8.0,
+                side_uv.max.y * 128.0 - side_uv.min.y * 128.0,
+            ),
+        ),
+        (
+            [
+                [-half_x, bottom, -half_z],
+                [-half_x, bottom, half_z],
+                [-half_x, top, half_z],
+                [-half_x, top, -half_z],
+            ],
+            [-1.0, 0.0, 0.0],
+            UvRect::pixels(
+                side_uv.min.x + 8.0,
+                side_uv.min.y,
+                8.0,
+                side_uv.max.y * 128.0 - side_uv.min.y * 128.0,
+            ),
+        ),
+        (
+            [
+                [-half_x, top, half_z],
+                [half_x, top, half_z],
+                [half_x, top, -half_z],
+                [-half_x, top, -half_z],
+            ],
+            [0.0, 1.0, 0.0],
+            UvRect::pixels(side_uv.min.x, cap_y, 8.0, 8.0),
+        ),
+        (
+            [
+                [-half_x, bottom, -half_z],
+                [half_x, bottom, -half_z],
+                [half_x, bottom, half_z],
+                [-half_x, bottom, half_z],
+            ],
+            [0.0, -1.0, 0.0],
+            UvRect::pixels(side_uv.min.x + 8.0, cap_y, 8.0, 8.0),
+        ),
+    ];
+
+    let model_rotation = Quat::from_rotation_z(VIEWMODEL_MESH_ROTATION);
+    for (face, normal, uv) in faces {
+        let start = positions.len() as u32;
+        positions.extend(face.map(|vertex| (model_rotation * Vec3::from_array(vertex)).to_array()));
+        let oriented_normal = (model_rotation * Vec3::from_array(normal)).to_array();
+        normals.extend([oriented_normal; 4]);
+        uvs.extend(uv.corners());
+        indices.extend([start, start + 1, start + 2, start + 2, start + 3, start]);
+    }
 }
 
 #[cfg(test)]
@@ -279,9 +340,9 @@ mod tests {
     }
 
     #[test]
-    fn arm_is_a_complete_textured_cuboid() {
+    fn arm_contains_complete_textured_base_and_sleeve_cuboids() {
         let mesh = arm_mesh();
-        assert_eq!(mesh.count_vertices(), 24);
-        assert_eq!(mesh.indices().map(Indices::len), Some(36));
+        assert_eq!(mesh.count_vertices(), 48);
+        assert_eq!(mesh.indices().map(Indices::len), Some(72));
     }
 }
