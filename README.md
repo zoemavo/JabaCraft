@@ -11,5 +11,5 @@ foliage, and water colors are baked into the atlas because Rustcraft does not
 yet implement Minecraft-style biome tinting or animated textures.
 
 Faithful 32x is copyright © Faithful Resource Pack and is used under the
-[Faithful License](https://faithfulpack.net/license). Rustcraft is not an
+[Faithful License](https://faithfulpack.net/license). JabaCraft is not an
 official Faithful project and is not endorsed by the Faithful team.
