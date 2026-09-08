@@ -11,7 +11,7 @@ const ARM_HEIGHT: f32 = 0.45;
 const ARM_DEPTH: f32 = 0.15;
 // The pivot is the shoulder: it stays beside the hotbar while the arm extends
 // diagonally toward the middle of the screen.
-const IDLE_TRANSLATION: Vec3 = Vec3::new(0.42, -0.43, -0.72);
+const IDLE_TRANSLATION: Vec3 = Vec3::new(0.42, -0.43, -1.12);
 const IDLE_ROTATION: Vec3 = Vec3::new(0.35, -0.45, -2.62);
 
 #[derive(Component)]
