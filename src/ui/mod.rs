@@ -63,7 +63,7 @@ impl Plugin for UiPlugin {
                 Update,
                 (
                     inventory_panel::handle_inventory_clicks,
-                    inventory_panel::handle_recipe_clicks,
+                    inventory_panel::handle_crafting_click,
                 ),
             )
             .add_systems(
@@ -71,7 +71,7 @@ impl Plugin for UiPlugin {
                 (
                     sync_hotbar_ui,
                     inventory_panel::sync_inventory_panel,
-                    inventory_panel::sync_recipe_buttons,
+                    inventory_panel::sync_crafting_preview,
                     inventory_panel::follow_cursor_stack,
                     inventory_panel::sync_item_tooltip,
                     crosshair::sync_crosshair_visibility,

@@ -8,8 +8,10 @@ use crate::{
 
 const ICON_COUNT: usize = 10;
 const ICON_SIZE: f32 = 27.0;
+const ICON_STEP: f32 = 24.0;
+const ROW_EDGE_PADDING: f32 = 1.5;
 const HOTBAR_TOP_OFFSET: f32 = 90.0;
-const HUD_WIDTH: f32 = 600.0;
+const HUD_WIDTH: f32 = 546.0;
 
 #[derive(Component)]
 pub(super) struct SurvivalHudRoot;
@@ -83,6 +85,7 @@ fn spawn_vital_row(
             Name::new(format!("{name} Bar")),
             Node {
                 flex_direction: direction,
+                padding: UiRect::horizontal(Val::Px(ROW_EDGE_PADDING)),
                 ..default()
             },
         ))
@@ -92,7 +95,7 @@ fn spawn_vital_row(
                     Name::new(format!("{name} Icon {}", index + 1)),
                     Node {
                         position_type: PositionType::Relative,
-                        width: Val::Px(ICON_SIZE),
+                        width: Val::Px(ICON_STEP),
                         height: Val::Px(ICON_SIZE),
                         ..default()
                     },
@@ -102,6 +105,7 @@ fn spawn_vital_row(
                         ImageNode::new(assets.load(empty_texture)),
                         Node {
                             position_type: PositionType::Absolute,
+                            left: Val::Px(-(ICON_SIZE - ICON_STEP) * 0.5),
                             width: Val::Px(ICON_SIZE),
                             height: Val::Px(ICON_SIZE),
                             ..default()
@@ -112,6 +116,7 @@ fn spawn_vital_row(
                         ImageNode::default(),
                         Node {
                             position_type: PositionType::Absolute,
+                            left: Val::Px(-(ICON_SIZE - ICON_STEP) * 0.5),
                             width: Val::Px(ICON_SIZE),
                             height: Val::Px(ICON_SIZE),
                             ..default()
@@ -195,5 +200,13 @@ mod tests {
         assert_eq!(icon_fill(5.0, 1), IconFill::Full);
         assert_eq!(icon_fill(5.0, 2), IconFill::Half);
         assert_eq!(icon_fill(5.0, 3), IconFill::Empty);
+    }
+
+    #[test]
+    fn vital_rows_fit_inside_the_hotbar_width() {
+        let row_width = ICON_COUNT as f32 * ICON_STEP + ROW_EDGE_PADDING * 2.0;
+
+        assert!(row_width * 2.0 < HUD_WIDTH);
+        assert_eq!(HUD_WIDTH, 364.0 * 1.5);
     }
 }

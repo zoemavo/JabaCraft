@@ -1,7 +1,7 @@
 use bevy::{prelude::*, window::PrimaryWindow};
 
 use crate::{
-    crafting::{RecipeId, RecipeRegistry, can_craft, craft},
+    crafting::{Recipe, RecipeRegistry, can_craft, craft},
     inventory::{
         HOTBAR_SLOT_COUNT, INVENTORY_SLOT_COUNT, InventoryClick, InventoryState, PlayerInventory,
     },
@@ -21,9 +21,9 @@ const STORAGE_TOP: f32 = 166.0 * UI_SCALE;
 const HOTBAR_TOP: f32 = 282.0 * UI_SCALE;
 const HOVER_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.32);
 const EMPTY_COLOR: Color = Color::srgb(0.10, 0.11, 0.13);
-const RECIPE_READY_COLOR: Color = Color::srgba(0.18, 0.45, 0.18, 0.94);
-const RECIPE_HOVER_COLOR: Color = Color::srgba(0.28, 0.62, 0.28, 0.98);
-const RECIPE_UNAVAILABLE_COLOR: Color = Color::srgba(0.18, 0.18, 0.18, 0.88);
+const CRAFT_INPUT_POSITIONS: [[f32; 2]; 4] =
+    [[194.0, 34.0], [230.0, 34.0], [194.0, 70.0], [230.0, 70.0]];
+const CRAFT_OUTPUT_POSITION: [f32; 2] = [306.0, 54.0];
 
 #[derive(Component)]
 pub(super) struct InventoryPanelRoot;
@@ -53,13 +53,24 @@ pub(super) struct ItemTooltip;
 pub(super) struct ItemTooltipText;
 
 #[derive(Component)]
-pub(super) struct RecipeButtonView(RecipeId);
+pub(super) struct CraftingInputSlot(usize);
 
-pub(super) fn spawn_inventory_panel(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    recipes: Res<RecipeRegistry>,
-) {
+#[derive(Component)]
+pub(super) struct CraftingInputIcon(usize);
+
+#[derive(Component)]
+pub(super) struct CraftingInputCount(usize);
+
+#[derive(Component)]
+pub(super) struct CraftingOutputSlot;
+
+#[derive(Component)]
+pub(super) struct CraftingOutputIcon;
+
+#[derive(Component)]
+pub(super) struct CraftingOutputCount;
+
+pub(super) fn spawn_inventory_panel(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn((
             Name::new("Inventory Overlay"),
@@ -90,7 +101,7 @@ pub(super) fn spawn_inventory_panel(
                 ))
                 .with_children(|panel| {
                     spawn_player_preview(panel, &asset_server);
-                    spawn_recipe_list(panel, &recipes);
+                    spawn_crafting_preview(panel);
                     spawn_slot_grid(
                         panel,
                         "Inventory Storage Grid",
@@ -190,61 +201,104 @@ pub(super) fn spawn_inventory_panel(
         ));
 }
 
-fn spawn_recipe_list(parent: &mut ChildSpawnerCommands, recipes: &RecipeRegistry) {
-    parent
-        .spawn((
-            Name::new("Shapeless Recipes"),
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(154.0 * UI_SCALE),
-                top: Val::Px(16.0 * UI_SCALE),
-                width: Val::Px(184.0 * UI_SCALE),
-                height: Val::Px(140.0 * UI_SCALE),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                row_gap: Val::Px(3.0 * UI_SCALE),
-                padding: UiRect::all(Val::Px(3.0 * UI_SCALE)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.03, 0.03, 0.03, 0.78)),
-        ))
-        .with_children(|list| {
-            list.spawn((
-                Text::new("Recipes"),
-                TextFont {
-                    font_size: FontSize::Px(13.0 * UI_SCALE),
-                    ..default()
-                },
-                TextColor(Color::WHITE),
+fn spawn_crafting_preview(parent: &mut ChildSpawnerCommands) {
+    for (index, [left, top]) in CRAFT_INPUT_POSITIONS.into_iter().enumerate() {
+        parent
+            .spawn((
+                Name::new(format!("Crafting Ingredient {}", index + 1)),
+                CraftingInputSlot(index),
                 Node {
-                    height: Val::Px(18.0 * UI_SCALE),
+                    display: Display::None,
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(left * UI_SCALE),
+                    top: Val::Px(top * UI_SCALE),
+                    width: Val::Px(SLOT_SIZE),
+                    height: Val::Px(SLOT_SIZE),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
                     ..default()
                 },
-            ));
-            for (index, recipe) in recipes.recipes().iter().enumerate() {
-                list.spawn((
-                    Name::new(format!("Craft {}", recipe.name)),
-                    Button,
-                    RecipeButtonView(RecipeId(index)),
-                    Text::new(recipe.name),
+            ))
+            .with_children(|slot| {
+                slot.spawn((
+                    CraftingInputIcon(index),
+                    ImageNode::default(),
+                    Node {
+                        width: Val::Px(ICON_SIZE),
+                        height: Val::Px(ICON_SIZE),
+                        ..default()
+                    },
+                ));
+                slot.spawn((
+                    CraftingInputCount(index),
+                    Text::new(""),
                     TextFont {
-                        font_size: FontSize::Px(11.0 * UI_SCALE),
+                        font_size: FontSize::Px(15.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
-                    TextLayout::justify(Justify::Center),
+                    TextShadow {
+                        offset: Vec2::splat(1.0),
+                        color: Color::BLACK,
+                    },
                     Node {
-                        width: Val::Percent(100.0),
-                        height: Val::Px(33.0 * UI_SCALE),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        border: UiRect::all(Val::Px(1.0 * UI_SCALE)),
+                        position_type: PositionType::Absolute,
+                        right: Val::Px(2.0),
+                        bottom: Val::Px(1.0),
                         ..default()
                     },
-                    BackgroundColor(RECIPE_UNAVAILABLE_COLOR),
-                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.32)),
                 ));
-            }
+            });
+    }
+
+    let [left, top] = CRAFT_OUTPUT_POSITION;
+    parent
+        .spawn((
+            Name::new("Crafting Output"),
+            Button,
+            CraftingOutputSlot,
+            Node {
+                display: Display::None,
+                position_type: PositionType::Absolute,
+                left: Val::Px(left * UI_SCALE),
+                top: Val::Px(top * UI_SCALE),
+                width: Val::Px(SLOT_SIZE),
+                height: Val::Px(SLOT_SIZE),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+        ))
+        .with_children(|slot| {
+            slot.spawn((
+                CraftingOutputIcon,
+                ImageNode::default(),
+                Node {
+                    width: Val::Px(ICON_SIZE),
+                    height: Val::Px(ICON_SIZE),
+                    ..default()
+                },
+            ));
+            slot.spawn((
+                CraftingOutputCount,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(15.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                TextShadow {
+                    offset: Vec2::splat(1.0),
+                    color: Color::BLACK,
+                },
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: Val::Px(2.0),
+                    bottom: Val::Px(1.0),
+                    ..default()
+                },
+            ));
         });
 }
 
@@ -478,55 +532,126 @@ pub(super) fn handle_inventory_clicks(
     }
 }
 
-pub(super) fn handle_recipe_clicks(
+pub(super) fn handle_crafting_click(
     state: Res<InventoryState>,
     mouse: Res<ButtonInput<MouseButton>>,
     recipes: Res<RecipeRegistry>,
     items: Res<ItemRegistry>,
-    buttons: Query<(&Interaction, &RecipeButtonView)>,
+    output: Single<&Interaction, With<CraftingOutputSlot>>,
     mut inventory: ResMut<PlayerInventory>,
 ) {
     if !state.is_open() || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
 
-    let Some(recipe_id) = buttons
-        .iter()
-        .find(|(interaction, _)| {
-            matches!(**interaction, Interaction::Pressed | Interaction::Hovered)
-        })
-        .map(|(_, button)| button.0)
-    else {
+    if !matches!(*output, Interaction::Pressed | Interaction::Hovered) {
         return;
-    };
-    if let Some(recipe) = recipes.get(recipe_id) {
+    }
+    if let Some(recipe) = displayed_recipe(&inventory, &recipes) {
         craft(&mut inventory, recipe, &items);
     }
 }
 
-pub(super) fn sync_recipe_buttons(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn sync_crafting_preview(
     inventory: Res<PlayerInventory>,
     recipes: Res<RecipeRegistry>,
-    mut buttons: Query<(
-        &RecipeButtonView,
-        &Interaction,
-        &mut BackgroundColor,
-        &mut Text,
-    )>,
+    icon_assets: Res<ItemIconAssets>,
+    mut input_slots: Query<(&CraftingInputSlot, &mut Node), Without<CraftingOutputSlot>>,
+    mut input_icons: Query<(&CraftingInputIcon, &mut ImageNode), Without<CraftingOutputIcon>>,
+    mut input_counts: Query<(&CraftingInputCount, &mut Text), Without<CraftingOutputCount>>,
+    output_slot: Single<
+        (&Interaction, &mut Node, &mut BackgroundColor),
+        (With<CraftingOutputSlot>, Without<CraftingInputSlot>),
+    >,
+    mut output_icon: Single<&mut ImageNode, (With<CraftingOutputIcon>, Without<CraftingInputIcon>)>,
+    mut output_count: Single<&mut Text, (With<CraftingOutputCount>, Without<CraftingInputCount>)>,
 ) {
-    for (button, interaction, mut background, mut text) in &mut buttons {
-        let Some(recipe) = recipes.get(button.0) else {
-            continue;
-        };
-        let available = can_craft(&inventory, recipe);
-        background.0 = if !available {
-            RECIPE_UNAVAILABLE_COLOR
-        } else if matches!(interaction, Interaction::Hovered | Interaction::Pressed) {
-            RECIPE_HOVER_COLOR
+    let (interaction, mut output_node, mut output_background) = output_slot.into_inner();
+    let Some(recipe) = displayed_recipe(&inventory, &recipes) else {
+        output_node.display = Display::None;
+        set_item_icon(&mut output_icon, &icon_assets, None);
+        output_count.0.clear();
+        for (_, mut node) in &mut input_slots {
+            node.display = Display::None;
+        }
+        return;
+    };
+
+    for (view, mut node) in &mut input_slots {
+        node.display = if recipe.inputs.get(view.0).is_some() {
+            Display::Flex
         } else {
-            RECIPE_READY_COLOR
+            Display::None
         };
-        text.0 = recipe.name.to_owned();
+    }
+    for (view, mut image) in &mut input_icons {
+        let ingredient = recipe.inputs.get(view.0);
+        set_item_icon(&mut image, &icon_assets, ingredient.map(|entry| entry.item));
+    }
+    for (view, mut text) in &mut input_counts {
+        text.0 = recipe
+            .inputs
+            .get(view.0)
+            .map(|entry| entry.count.to_string())
+            .unwrap_or_default();
+    }
+    let output = recipe
+        .outputs
+        .first()
+        .expect("built-in recipes have outputs");
+    output_node.display = Display::Flex;
+    output_background.0 = if matches!(interaction, Interaction::Hovered | Interaction::Pressed) {
+        HOVER_COLOR
+    } else {
+        Color::NONE
+    };
+    set_item_icon(&mut output_icon, &icon_assets, Some(output.item));
+    output_count.0 = output.count.to_string();
+}
+
+fn displayed_recipe<'a>(
+    inventory: &PlayerInventory,
+    recipes: &'a RecipeRegistry,
+) -> Option<&'a Recipe> {
+    recipes
+        .recipes()
+        .iter()
+        .rev()
+        .find(|recipe| can_craft(inventory, recipe))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::item::ItemId;
+
+    use super::*;
+
+    #[test]
+    fn crafting_preview_uses_icons_only_for_an_available_recipe() {
+        let recipes = RecipeRegistry::default();
+        let items = ItemRegistry::default();
+        let mut inventory = PlayerInventory::default();
+
+        assert!(displayed_recipe(&inventory, &recipes).is_none());
+        inventory.add_item(ItemId::WOOD_BLOCK, 1, &items);
+
+        let recipe = displayed_recipe(&inventory, &recipes).unwrap();
+        assert_eq!(recipe.inputs[0].item, ItemId::WOOD_BLOCK);
+        assert_eq!(recipe.outputs[0].item, ItemId::OAK_PLANKS);
+    }
+
+    #[test]
+    fn crafting_preview_prioritizes_the_pickaxe_when_it_is_available() {
+        let recipes = RecipeRegistry::default();
+        let items = ItemRegistry::default();
+        let mut inventory = PlayerInventory::default();
+        inventory.add_item(ItemId::OAK_PLANKS, 2, &items);
+        inventory.add_item(ItemId::STONE_BLOCK, 3, &items);
+        inventory.add_item(ItemId::STICK, 2, &items);
+
+        let recipe = displayed_recipe(&inventory, &recipes).unwrap();
+        assert_eq!(recipe.outputs[0].item, ItemId::STONE_PICKAXE);
     }
 }
 
