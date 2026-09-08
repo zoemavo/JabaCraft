@@ -6,11 +6,13 @@ use bevy::{
 
 use crate::{interaction::MiningProgress, inventory::InventoryState, player::PlayerCamera};
 
-const ARM_WIDTH: f32 = 0.22;
-const ARM_HEIGHT: f32 = 0.66;
-const ARM_DEPTH: f32 = 0.22;
-const IDLE_TRANSLATION: Vec3 = Vec3::new(0.25, 0.01, -0.62);
-const IDLE_ROTATION: Vec3 = Vec3::new(0.55, -0.55, 0.32);
+const ARM_WIDTH: f32 = 0.15;
+const ARM_HEIGHT: f32 = 0.45;
+const ARM_DEPTH: f32 = 0.15;
+// The pivot is the shoulder: it stays beside the hotbar while the arm extends
+// diagonally toward the middle of the screen.
+const IDLE_TRANSLATION: Vec3 = Vec3::new(0.42, -0.30, -0.72);
+const IDLE_ROTATION: Vec3 = Vec3::new(0.35, -0.45, -2.62);
 
 #[derive(Component)]
 pub(super) struct FirstPersonHandRoot;
@@ -104,12 +106,12 @@ fn hand_pose(mining: &MiningProgress) -> HandPose {
     let swing = (phase * PI).sin();
     let follow_through = (phase * PI * 2.0).sin();
     HandPose {
-        translation: IDLE_TRANSLATION + Vec3::new(-0.13 * swing, 0.06 * swing, -0.05 * swing),
+        translation: IDLE_TRANSLATION + Vec3::new(-0.03 * swing, 0.02 * swing, -0.04 * swing),
         rotation: Quat::from_euler(
             EulerRot::XYZ,
-            IDLE_ROTATION.x + 0.95 * swing,
+            IDLE_ROTATION.x + 0.85 * swing,
             IDLE_ROTATION.y + 0.22 * swing,
-            IDLE_ROTATION.z - 0.18 * follow_through,
+            IDLE_ROTATION.z + 0.16 * follow_through,
         ),
     }
 }
@@ -139,7 +141,7 @@ impl UvRect {
 }
 
 fn arm_mesh(sleeve: bool) -> Mesh {
-    let expansion = if sleeve { 0.012 } else { 0.0 };
+    let expansion = if sleeve { 0.008 } else { 0.0 };
     let half_x = ARM_WIDTH * 0.5 + expansion;
     let half_z = ARM_DEPTH * 0.5 + expansion;
     let top = expansion;
