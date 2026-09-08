@@ -38,6 +38,10 @@ impl BlockRegistry {
     pub fn debug_color(&self, id: BlockId) -> [f32; 4] {
         self.definition(id).debug_color
     }
+
+    pub fn emitted_light(&self, id: BlockId) -> u8 {
+        self.definition(id).emitted_light
+    }
 }
 
 impl Default for BlockRegistry {
@@ -155,6 +159,7 @@ const fn definition(
         breakable,
         textures,
         hardness,
+        emitted_light: 0,
         debug_color,
     }
 }

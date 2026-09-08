@@ -3,8 +3,8 @@ use bevy::prelude::Resource;
 use crate::block::BlockId;
 
 use super::{
-    BLOCK_ITEM_MAX_STACK_SIZE, BUILTIN_ITEM_COUNT, ItemDefinition, ItemId, ItemStack,
-    ItemStackError,
+    BLOCK_ITEM_MAX_STACK_SIZE, BUILTIN_ITEM_COUNT, FoodProperties, ItemDefinition, ItemId,
+    ItemStack, ItemStackError,
 };
 
 /// Central source of item metadata and block-item mappings.
@@ -26,6 +26,16 @@ impl ItemRegistry {
         self.definition(id).block
     }
 
+    pub fn item_for_block(&self, block: BlockId) -> Option<ItemId> {
+        ItemId::ALL
+            .into_iter()
+            .find(|&item| self.definition(item).block == Some(block))
+    }
+
+    pub fn food(&self, id: ItemId) -> Option<FoodProperties> {
+        self.definition(id).food
+    }
+
     pub fn max_stack_size(&self, id: ItemId) -> u32 {
         self.definition(id).max_stack_size
     }
@@ -43,20 +53,31 @@ impl Default for ItemRegistry {
     fn default() -> Self {
         Self {
             definitions: [
-                block_item("grass block", BlockId::GRASS, [0.32, 0.68, 0.25, 1.0]),
-                block_item("dirt block", BlockId::DIRT, [0.45, 0.28, 0.14, 1.0]),
-                block_item("stone block", BlockId::STONE, [0.48, 0.50, 0.52, 1.0]),
-                block_item("sand block", BlockId::SAND, [0.82, 0.76, 0.49, 1.0]),
-                block_item("wood block", BlockId::WOOD, [0.48, 0.30, 0.13, 1.0]),
-                block_item("leaves block", BlockId::LEAVES, [0.20, 0.52, 0.16, 0.8]),
-                block_item("water block", BlockId::WATER, [0.12, 0.42, 0.82, 0.65]),
-                block_item("coal ore block", BlockId::COAL_ORE, [0.20, 0.21, 0.22, 1.0]),
-                block_item("iron ore block", BlockId::IRON_ORE, [0.65, 0.48, 0.37, 1.0]),
+                block_item("Grass Block", BlockId::GRASS, [0.32, 0.68, 0.25, 1.0]),
+                block_item("Dirt", BlockId::DIRT, [0.45, 0.28, 0.14, 1.0]),
+                block_item("Stone", BlockId::STONE, [0.48, 0.50, 0.52, 1.0]),
+                block_item("Sand", BlockId::SAND, [0.82, 0.76, 0.49, 1.0]),
+                block_item("Oak Log", BlockId::WOOD, [0.48, 0.30, 0.13, 1.0]),
+                block_item("Oak Leaves", BlockId::LEAVES, [0.20, 0.52, 0.16, 0.8]),
+                block_item("Water", BlockId::WATER, [0.12, 0.42, 0.82, 0.65]),
+                block_item("Coal Ore", BlockId::COAL_ORE, [0.20, 0.21, 0.22, 1.0]),
+                block_item("Iron Ore", BlockId::IRON_ORE, [0.65, 0.48, 0.37, 1.0]),
                 ItemDefinition {
-                    name: "stick",
+                    name: "Stick",
                     max_stack_size: 64,
                     block: None,
+                    food: None,
                     debug_color: [0.55, 0.34, 0.15, 1.0],
+                },
+                ItemDefinition {
+                    name: "Apple",
+                    max_stack_size: 64,
+                    block: None,
+                    food: Some(FoodProperties {
+                        nutrition: 4,
+                        saturation: 2.4,
+                    }),
+                    debug_color: [0.82, 0.05, 0.04, 1.0],
                 },
             ],
         }
@@ -68,6 +89,7 @@ const fn block_item(name: &'static str, block: BlockId, debug_color: [f32; 4]) -
         name,
         max_stack_size: BLOCK_ITEM_MAX_STACK_SIZE,
         block: Some(block),
+        food: None,
         debug_color,
     }
 }
@@ -104,6 +126,18 @@ mod tests {
 
         assert_eq!(registry.block_for(ItemId::DIRT_BLOCK), Some(BlockId::DIRT));
         assert_eq!(registry.block_for(ItemId::STICK), None);
+        assert_eq!(
+            registry.item_for_block(BlockId::DIRT),
+            Some(ItemId::DIRT_BLOCK)
+        );
+    }
+
+    #[test]
+    fn apple_restores_four_hunger_points() {
+        let food = ItemRegistry::default().food(ItemId::APPLE).unwrap();
+
+        assert_eq!(food.nutrition, 4);
+        assert_eq!(food.saturation, 2.4);
     }
 
     #[test]

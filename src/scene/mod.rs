@@ -1,7 +1,5 @@
 //! Bootstrap entities shared by the playable 3D scene.
 
-use std::f32::consts::{FRAC_PI_4, FRAC_PI_6};
-
 use bevy::{core_pipeline::tonemapping::Tonemapping, prelude::*};
 
 use crate::{
@@ -10,9 +8,10 @@ use crate::{
         Grounded, LookState, Noclip, Player, PlayerCamera, PlayerCollider, PlayerController,
         PlayerSettings, Velocity,
     },
+    survival::{Health, Hunger, RespawnPoint, SurvivalTracker},
 };
 
-/// Creates the player and lighting for the voxel world.
+/// Creates the player and camera for the voxel world.
 pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
@@ -26,37 +25,8 @@ fn setup_scene(
     player_settings: Res<PlayerSettings>,
     generation_settings: Res<GenerationSettings>,
 ) {
-    // Voxel faces that are not pointed at the sun still need enough fill light
-    // to be readable.  Without this, shadowed terrain is nearly black because
-    // the scene has no sky/environment lighting.
-    commands.insert_resource(GlobalAmbientLight {
-        color: Color::srgb(0.68, 0.79, 0.98),
-        brightness: 520.0,
-        ..default()
-    });
-    spawn_directional_light(&mut commands);
     spawn_player(&mut commands, &player_settings, generation_settings.seed);
     info!("Playable voxel scene initialized");
-}
-
-fn spawn_directional_light(commands: &mut Commands) {
-    commands.spawn((
-        Name::new("Sun"),
-        DirectionalLight {
-            // Direct sunlight remains the dominant light, while the ambient
-            // sky above keeps the shaded side of blocks legible.
-            color: Color::srgb(1.0, 0.93, 0.82),
-            illuminance: 32_000.0,
-            shadow_maps_enabled: true,
-            ..default()
-        },
-        Transform::from_rotation(Quat::from_euler(
-            EulerRot::XYZ,
-            -FRAC_PI_4 - FRAC_PI_6,
-            -FRAC_PI_4,
-            0.0,
-        )),
-    ));
 }
 
 fn spawn_player(commands: &mut Commands, settings: &PlayerSettings, terrain_seed: u64) {
@@ -65,6 +35,7 @@ fn spawn_player(commands: &mut Commands, settings: &PlayerSettings, terrain_seed
     let spawn_z = 10.0;
     let surface_y = terrain_height_at(terrain_seed, spawn_x as i64, spawn_z as i64) as f32 + 1.0;
     let player_position = Vec3::new(spawn_x, surface_y + collider.half_extents.y, spawn_z);
+    commands.insert_resource(RespawnPoint(player_position));
     let camera_height = settings.player_height.abs().max(0.01) * 0.4;
     let camera_position = player_position + Vec3::Y * camera_height;
     let target_surface_y = terrain_height_at(terrain_seed, 0, 0) as f32 + 1.0;
@@ -77,6 +48,9 @@ fn spawn_player(commands: &mut Commands, settings: &PlayerSettings, terrain_seed
             Name::new("Player"),
             Player,
             PlayerController::default(),
+            Health::default(),
+            Hunger::default(),
+            SurvivalTracker::new(player_position.y),
             Velocity::default(),
             Grounded(true),
             Noclip::default(),
@@ -90,8 +64,8 @@ fn spawn_player(commands: &mut Commands, settings: &PlayerSettings, terrain_seed
                 Name::new("Player Camera"),
                 PlayerCamera,
                 Camera3d::default(),
-                // Map the high dynamic range sun/sky lighting into the screen
-                // range instead of clipping bright faces to white.
+                // Keep bright voxel colors from clipping while preserving
+                // detail in the darker propagated-light levels.
                 Tonemapping::AcesFitted,
                 Projection::from(PerspectiveProjection {
                     fov: 60.0_f32.to_radians(),

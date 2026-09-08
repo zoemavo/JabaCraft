@@ -13,5 +13,6 @@ pub mod meshing;
 pub mod persistence;
 pub mod player;
 pub mod scene;
+pub mod survival;
 pub mod ui;
 pub mod world;

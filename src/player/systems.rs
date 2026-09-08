@@ -9,7 +9,10 @@ use bevy::{
 use super::{
     Grounded, LookState, Noclip, Player, PlayerCamera, PlayerController, PlayerSettings, Velocity,
 };
-use crate::inventory::InventoryState;
+use crate::{
+    inventory::InventoryState,
+    survival::{GameMode, Hunger},
+};
 
 pub(super) fn capture_cursor_on_startup(
     mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
@@ -38,9 +41,9 @@ pub(super) fn collect_movement_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     cursor: Single<&CursorOptions, With<PrimaryWindow>>,
     inventory_state: Res<InventoryState>,
-    mut players: Query<&mut PlayerController, With<Player>>,
+    mut players: Query<(&mut PlayerController, Option<&Hunger>), With<Player>>,
 ) {
-    for mut controller in &mut players {
+    for (mut controller, hunger) in &mut players {
         if inventory_state.is_open() || cursor.grab_mode == CursorGrabMode::None {
             *controller = PlayerController::default();
             continue;
@@ -51,8 +54,9 @@ pub(super) fn collect_movement_input(
             key_axis(&keyboard, KeyCode::KeyS, KeyCode::KeyW),
         )
         .normalize_or_zero();
-        controller.sprinting =
+        let sprint_pressed =
             keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+        controller.sprinting = sprint_pressed && hunger.is_none_or(|hunger| hunger.can_sprint());
         controller.jump_requested = keyboard.just_pressed(KeyCode::Space);
         controller.vertical_movement = if keyboard.pressed(KeyCode::Space) {
             1.0
@@ -67,8 +71,18 @@ pub(super) fn collect_movement_input(
 pub(super) fn toggle_noclip(
     keyboard: Res<ButtonInput<KeyCode>>,
     inventory_state: Res<InventoryState>,
+    mode: Res<GameMode>,
     mut players: Query<(&mut Noclip, &mut Grounded), With<Player>>,
 ) {
+    if *mode == GameMode::Survival {
+        for (mut noclip, mut grounded) in &mut players {
+            if noclip.0 {
+                noclip.0 = false;
+                grounded.0 = false;
+            }
+        }
+        return;
+    }
     if inventory_state.is_open() || !keyboard.just_pressed(KeyCode::F4) {
         return;
     }

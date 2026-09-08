@@ -1,6 +1,7 @@
 //! Chunk meshing and rendering orchestration.
 
 mod atlas;
+mod lighting;
 mod renderer;
 mod voxel;
 
@@ -22,7 +23,9 @@ pub struct MeshingSettings {
 impl Default for MeshingSettings {
     fn default() -> Self {
         Self {
-            rebuild_budget_per_frame: 8,
+            // Lighting and geometry are intentionally streamed one chunk at a
+            // time so terrain loading cannot monopolize an entire frame.
+            rebuild_budget_per_frame: 1,
         }
     }
 }
@@ -56,6 +59,9 @@ fn create_chunk_material(
         // Blocks are matte.  Suppressing the default dielectric highlight
         // avoids broad plastic-looking glare on sun-facing terrain.
         reflectance: 0.18,
+        // The voxel mesher bakes Minecraft-style sky light, block light, and
+        // smooth corner occlusion into vertex colors.
+        unlit: true,
         ..default()
     })));
 }

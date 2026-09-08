@@ -71,6 +71,8 @@ pub struct BlockDefinition {
     pub breakable: bool,
     pub textures: FaceTextureIndices,
     pub hardness: f32,
+    /// Minecraft-style local light emitted by this block, from 0 to 15.
+    pub emitted_light: u8,
     /// Temporary vertex color used until the texture atlas is introduced.
     pub debug_color: [f32; 4],
 }

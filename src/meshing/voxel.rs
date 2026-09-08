@@ -9,20 +9,34 @@ use crate::{
     coordinates::{ChunkPos, LocalBlockPos, WorldBlockPos},
 };
 
-use super::atlas::atlas_uvs;
+use super::{
+    atlas::atlas_uvs,
+    lighting::{ChunkLightMap, vertex_light_color},
+};
 
 pub(super) fn build_chunk_mesh(
     chunk_position: ChunkPos,
     storage: &ChunkStorage,
     registry: &BlockRegistry,
+    terrain_seed: u64,
 ) -> Mesh {
-    build_chunk_mesh_buffers(chunk_position, storage, registry).into_mesh()
+    build_chunk_mesh_buffers_with_seed(chunk_position, storage, registry, terrain_seed).into_mesh()
 }
 
+#[cfg(test)]
 fn build_chunk_mesh_buffers(
     chunk_position: ChunkPos,
     storage: &ChunkStorage,
     registry: &BlockRegistry,
+) -> ChunkMeshBuffers {
+    build_chunk_mesh_buffers_with_seed(chunk_position, storage, registry, 0)
+}
+
+fn build_chunk_mesh_buffers_with_seed(
+    chunk_position: ChunkPos,
+    storage: &ChunkStorage,
+    registry: &BlockRegistry,
+    terrain_seed: u64,
 ) -> ChunkMeshBuffers {
     let Some(chunk) = storage.get_chunk(chunk_position) else {
         return ChunkMeshBuffers::default();
@@ -31,6 +45,7 @@ fn build_chunk_mesh_buffers(
         return ChunkMeshBuffers::default();
     }
     let mut buffers = ChunkMeshBuffers::default();
+    let mut lights = None;
 
     for y in 0..CHUNK_HEIGHT {
         for z in 0..CHUNK_DEPTH {
@@ -45,7 +60,16 @@ fn build_chunk_mesh_buffers(
                 for face in FACES {
                     if is_face_visible(world, face, storage, registry) {
                         let texture = registry.texture_for(block, face.block_face);
-                        buffers.push_face([x as f32, y as f32, z as f32], face, texture);
+                        let lights = lights.get_or_insert_with(|| {
+                            ChunkLightMap::build(chunk_position, storage, registry, terrain_seed)
+                        });
+                        buffers.push_face(
+                            [x as f32, y as f32, z as f32],
+                            world,
+                            face,
+                            texture,
+                            lights,
+                        );
                     }
                 }
             }
@@ -73,7 +97,7 @@ fn is_face_visible(
 
     storage
         .get_block(neighbor)
-        .map_or(true, |block| registry.is_transparent(block))
+        .is_none_or(|block| registry.is_transparent(block))
 }
 
 #[derive(Default)]
@@ -81,13 +105,21 @@ struct ChunkMeshBuffers {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
+    colors: Vec<[f32; 4]>,
     indices: Vec<u32>,
 }
 
 impl ChunkMeshBuffers {
-    fn push_face(&mut self, block: [f32; 3], face: Face, texture: TextureIndex) {
+    fn push_face(
+        &mut self,
+        block: [f32; 3],
+        world: WorldBlockPos,
+        face: Face,
+        texture: TextureIndex,
+        lights: &ChunkLightMap,
+    ) {
         let first_vertex = self.positions.len() as u32;
-        let uvs = atlas_uvs(texture);
+        let uvs = face_uvs(texture, face.block_face);
 
         for (vertex, uv) in face.vertices.into_iter().zip(uvs) {
             self.positions.push([
@@ -97,6 +129,8 @@ impl ChunkMeshBuffers {
             ]);
             self.normals.push(face.normal);
             self.uvs.push(uv);
+            self.colors
+                .push(vertex_light_color(world, face.block_face, vertex, lights));
         }
         self.indices.extend_from_slice(&[
             first_vertex,
@@ -116,7 +150,19 @@ impl ChunkMeshBuffers {
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
         .with_inserted_indices(Indices::U32(self.indices))
+    }
+}
+
+fn face_uvs(texture: TextureIndex, face: BlockFace) -> [[f32; 2]; 4] {
+    let uvs = atlas_uvs(texture);
+    match face {
+        // North and south use horizontal-first vertex winding to keep their
+        // normals facing outward. Reorder the UV corners so texture "up"
+        // still points toward world +Y instead of toward the side.
+        BlockFace::North | BlockFace::South => [uvs[0], uvs[3], uvs[2], uvs[1]],
+        _ => uvs,
     }
 }
 
@@ -353,12 +399,14 @@ mod tests {
         assert_eq!(buffers.positions.len(), 6 * 4);
         assert_eq!(buffers.normals.len(), 6 * 4);
         assert_eq!(buffers.uvs.len(), 6 * 4);
+        assert_eq!(buffers.colors.len(), 6 * 4);
         assert_eq!(buffers.indices.len(), 6 * 6);
 
         let mesh = buffers.into_mesh();
         assert!(mesh.attribute(Mesh::ATTRIBUTE_POSITION).is_some());
         assert!(mesh.attribute(Mesh::ATTRIBUTE_NORMAL).is_some());
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some());
         assert!(mesh.indices().is_some());
     }
 
@@ -411,5 +459,23 @@ mod tests {
         assert_eq!(top[0], [32.5 / 128.0, 31.5 / 128.0]);
         assert_eq!(bottom[0], [64.5 / 128.0, 31.5 / 128.0]);
         assert_eq!(side[0], [96.5 / 128.0, 31.5 / 128.0]);
+    }
+
+    #[test]
+    fn side_texture_top_always_points_toward_world_up() {
+        for face in [EAST, WEST, SOUTH, NORTH] {
+            let uvs = face_uvs(3, face.block_face);
+            let top_v = uvs.iter().map(|uv| uv[1]).fold(f32::INFINITY, f32::min);
+            let bottom_v = uvs.iter().map(|uv| uv[1]).fold(f32::NEG_INFINITY, f32::max);
+
+            for (vertex, uv) in face.vertices.into_iter().zip(uvs) {
+                let expected_v = if vertex[1] == 1.0 { top_v } else { bottom_v };
+                assert_eq!(
+                    uv[1], expected_v,
+                    "{:?} texture is rotated",
+                    face.block_face
+                );
+            }
+        }
     }
 }

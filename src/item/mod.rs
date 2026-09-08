@@ -7,7 +7,7 @@ mod stack;
 
 use bevy::prelude::*;
 
-pub use definition::ItemDefinition;
+pub use definition::{FoodProperties, ItemDefinition};
 pub use id::{BUILTIN_ITEM_COUNT, InvalidItemId, ItemId};
 pub use registry::ItemRegistry;
 pub use stack::{ItemStack, ItemStackError};

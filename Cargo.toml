@@ -22,6 +22,12 @@ bevy = { version = "0.19", default-features = false, features = [
 [profile.dev]
 debug = 0
 incremental = false
+opt-level = 1
+
+# Bevy's render stack is extremely slow without optimization, even when the
+# game itself is built in the regular development profile.
+[profile.dev.package."*"]
+opt-level = 3
 
 [profile.test]
 debug = 0

@@ -1,6 +1,6 @@
 use bevy::prelude::Resource;
 
-use crate::item::{BLOCK_ITEM_MAX_STACK_SIZE, ItemId, ItemStack};
+use crate::item::{ItemId, ItemRegistry, ItemStack};
 
 pub const HOTBAR_SLOT_COUNT: usize = 9;
 pub const INVENTORY_SLOT_COUNT: usize = 27;
@@ -74,6 +74,44 @@ impl PlayerInventory {
             self.slots[self.selected_hotbar] = None;
         }
         true
+    }
+
+    /// Adds items to matching stacks first and then empty slots.
+    ///
+    /// Returns the amount that did not fit.
+    pub fn add_item(&mut self, item: ItemId, mut count: u32, registry: &ItemRegistry) -> u32 {
+        let stack_limit = registry.max_stack_size(item);
+
+        for stack in self.slots.iter_mut().flatten() {
+            if stack.item() == item && stack.max_stack_size() == stack_limit {
+                count -= stack.add(count);
+                if count == 0 {
+                    return 0;
+                }
+            }
+        }
+
+        for slot in &mut self.slots {
+            if slot.is_some() {
+                continue;
+            }
+            let amount = count.min(stack_limit);
+            *slot = Some(
+                ItemStack::new(item, amount, stack_limit)
+                    .expect("inventory insertion respects the registry stack limit"),
+            );
+            count -= amount;
+            if count == 0 {
+                return 0;
+            }
+        }
+
+        count
+    }
+
+    pub fn clear(&mut self) {
+        self.slots.fill(None);
+        self.cursor_held = None;
     }
 
     /// Applies a mouse action without involving UI entities or Bevy pointer state.
@@ -180,30 +218,12 @@ impl PlayerInventory {
 
 impl Default for PlayerInventory {
     fn default() -> Self {
-        let mut slots = [None; TOTAL_SLOT_COUNT];
-        slots[0] = Some(block_stack(ItemId::DIRT_BLOCK, 64));
-        slots[1] = Some(block_stack(ItemId::STONE_BLOCK, 64));
-        slots[2] = Some(block_stack(ItemId::GRASS_BLOCK, 32));
-        slots[3] = Some(block_stack(ItemId::SAND_BLOCK, 48));
-        slots[4] = Some(block_stack(ItemId::WOOD_BLOCK, 32));
-        slots[5] = Some(block_stack(ItemId::LEAVES_BLOCK, 32));
-        slots[6] = Some(block_stack(ItemId::COAL_ORE_BLOCK, 16));
-        slots[7] = Some(block_stack(ItemId::IRON_ORE_BLOCK, 12));
-        slots[HOTBAR_SLOT_COUNT] = Some(block_stack(ItemId::DIRT_BLOCK, 20));
-        slots[HOTBAR_SLOT_COUNT + 4] = Some(block_stack(ItemId::WOOD_BLOCK, 18));
-        slots[HOTBAR_SLOT_COUNT + 10] = Some(block_stack(ItemId::STICK, 24));
-
         Self {
-            slots,
+            slots: [None; TOTAL_SLOT_COUNT],
             selected_hotbar: 0,
             cursor_held: None,
         }
     }
-}
-
-fn block_stack(item: ItemId, count: u32) -> ItemStack {
-    ItemStack::new(item, count, BLOCK_ITEM_MAX_STACK_SIZE)
-        .expect("built-in inventory stacks must respect their item limit")
 }
 
 #[cfg(test)]
@@ -211,6 +231,12 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    const STACK_LIMIT: u32 = 64;
+
+    fn block_stack(item: ItemId, count: u32) -> ItemStack {
+        ItemStack::new(item, count, STACK_LIMIT).unwrap()
+    }
 
     fn empty_inventory() -> PlayerInventory {
         PlayerInventory {
@@ -240,10 +266,7 @@ mod tests {
         assert_eq!(inventory.hotbar_slots().len(), HOTBAR_SLOT_COUNT);
         assert_eq!(inventory.inventory_slots().len(), INVENTORY_SLOT_COUNT);
         assert_eq!(inventory.slots().len(), TOTAL_SLOT_COUNT);
-        assert_eq!(
-            inventory.selected_stack().unwrap().item(),
-            ItemId::DIRT_BLOCK
-        );
+        assert_eq!(inventory.selected_stack(), None);
     }
 
     #[test]
@@ -337,7 +360,9 @@ mod tests {
 
     #[test]
     fn every_mouse_operation_conserves_all_items() {
-        let mut inventory = PlayerInventory::default();
+        let mut inventory = empty_inventory();
+        inventory.slots[0] = Some(block_stack(ItemId::DIRT_BLOCK, 20));
+        inventory.slots[1] = Some(block_stack(ItemId::STONE_BLOCK, 12));
         let expected = counts(&inventory);
         let actions = [
             (0, InventoryClick::Left),
@@ -360,10 +385,33 @@ mod tests {
 
     #[test]
     fn invalid_slot_never_changes_inventory() {
-        let mut inventory = PlayerInventory::default();
+        let mut inventory = empty_inventory();
+        inventory.slots[0] = Some(block_stack(ItemId::DIRT_BLOCK, 3));
         let expected = counts(&inventory);
 
         assert!(!inventory.click_slot(TOTAL_SLOT_COUNT, InventoryClick::Left));
         assert_eq!(counts(&inventory), expected);
+    }
+
+    #[test]
+    fn picked_up_items_merge_and_spill_into_empty_slots() {
+        let registry = ItemRegistry::default();
+        let mut inventory = empty_inventory();
+        inventory.slots[0] = Some(block_stack(ItemId::APPLE, 63));
+
+        assert_eq!(inventory.add_item(ItemId::APPLE, 3, &registry), 0);
+        assert_eq!(inventory.slot(0).unwrap().count(), 64);
+        assert_eq!(inventory.slot(1).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn full_inventory_returns_items_that_do_not_fit() {
+        let registry = ItemRegistry::default();
+        let mut inventory = empty_inventory();
+        inventory
+            .slots
+            .fill(Some(block_stack(ItemId::DIRT_BLOCK, 64)));
+
+        assert_eq!(inventory.add_item(ItemId::APPLE, 2, &registry), 2);
     }
 }

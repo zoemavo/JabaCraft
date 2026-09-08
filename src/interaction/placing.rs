@@ -176,7 +176,7 @@ fn block_intersects_aabb(block: WorldBlockPos, center: Vec3, half_extents: Vec3)
 
 #[cfg(test)]
 mod tests {
-    use crate::{block::BlockFace, chunk::Chunk, coordinates::ChunkPos};
+    use crate::{block::BlockFace, chunk::Chunk, coordinates::ChunkPos, item::ItemId};
 
     use super::*;
 
@@ -236,13 +236,14 @@ mod tests {
         storage.insert_chunk(ChunkPos::default(), Chunk::default());
         let position = WorldBlockPos::new(3, 3, 3);
         let mut inventory = PlayerInventory::default();
-        inventory.select_hotbar(1);
+        let item_registry = ItemRegistry::default();
+        inventory.add_item(ItemId::STONE_BLOCK, 2, &item_registry);
         let previous_count = inventory.selected_stack().unwrap().count();
 
         assert!(try_place_selected_block(
             &mut storage,
             &BlockRegistry::default(),
-            &ItemRegistry::default(),
+            &item_registry,
             &settings(),
             Vec3::new(10.0, 10.0, 10.0),
             PLAYER_HALF_EXTENTS,

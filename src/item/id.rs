@@ -1,7 +1,7 @@
 use std::fmt;
 
 /// Number of item types built into the base game.
-pub const BUILTIN_ITEM_COUNT: usize = 10;
+pub const BUILTIN_ITEM_COUNT: usize = 11;
 
 /// Compact item identity used by inventories and dropped-item data.
 ///
@@ -22,6 +22,7 @@ impl ItemId {
     pub const COAL_ORE_BLOCK: Self = Self(7);
     pub const IRON_ORE_BLOCK: Self = Self(8);
     pub const STICK: Self = Self(9);
+    pub const APPLE: Self = Self(10);
 
     pub const ALL: [Self; BUILTIN_ITEM_COUNT] = [
         Self::GRASS_BLOCK,
@@ -34,6 +35,7 @@ impl ItemId {
         Self::COAL_ORE_BLOCK,
         Self::IRON_ORE_BLOCK,
         Self::STICK,
+        Self::APPLE,
     ];
 
     pub const fn from_raw(raw: u16) -> Option<Self> {

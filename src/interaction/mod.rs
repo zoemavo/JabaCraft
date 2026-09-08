@@ -23,6 +23,8 @@ pub struct InteractionSettings {
     pub reach: f32,
     /// Minimum delay between blocks while the primary mouse button is held.
     pub break_repeat_interval: f32,
+    /// Bare-hand mining time is block hardness multiplied by this value.
+    pub survival_break_time_multiplier: f32,
     /// Minimum delay between placements while the secondary mouse button is held.
     pub place_repeat_interval: f32,
 }
@@ -30,8 +32,9 @@ pub struct InteractionSettings {
 impl Default for InteractionSettings {
     fn default() -> Self {
         Self {
-            reach: 5.0,
+            reach: 4.5,
             break_repeat_interval: 0.2,
+            survival_break_time_multiplier: 1.5,
             place_repeat_interval: 0.2,
         }
     }

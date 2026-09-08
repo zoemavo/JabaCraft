@@ -6,7 +6,7 @@ use crate::{
     block::BlockRegistry,
     chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, ChunkStorage},
     coordinates::ChunkPos,
-    generation::{ChunkGenerationQueue, ChunkLifecycle},
+    generation::{ChunkGenerationQueue, ChunkLifecycle, GenerationSettings},
 };
 
 use super::{ChunkMaterial, MeshingSettings, voxel::build_chunk_mesh};
@@ -64,6 +64,7 @@ pub(super) fn sync_chunk_renderer(
     mut commands: Commands,
     mut storage: ResMut<ChunkStorage>,
     registry: Res<BlockRegistry>,
+    generation_settings: Res<GenerationSettings>,
     settings: Res<MeshingSettings>,
     material: Res<ChunkMaterial>,
     mut generation_queue: ResMut<ChunkGenerationQueue>,
@@ -88,7 +89,8 @@ pub(super) fn sync_chunk_renderer(
         if !generation_queue.begin_meshing(position) {
             continue;
         }
-        let rebuilt_mesh = build_chunk_mesh(position, &storage, &registry);
+        let rebuilt_mesh =
+            build_chunk_mesh(position, &storage, &registry, generation_settings.seed);
 
         if let Some(rendered) = renderer.rendered.get_mut(&position) {
             apply_rebuilt_mesh(
@@ -221,6 +223,7 @@ mod tests {
             .init_resource::<ChunkGenerationQueue>()
             .init_resource::<ChunkRenderer>()
             .insert_resource(BlockRegistry::default())
+            .insert_resource(GenerationSettings::default())
             .insert_resource(MeshingSettings {
                 rebuild_budget_per_frame: usize::MAX,
             })

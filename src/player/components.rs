@@ -86,8 +86,8 @@ pub struct PlayerSettings {
 impl Default for PlayerSettings {
     fn default() -> Self {
         Self {
-            walk_speed: 4.5,
-            sprint_speed: 7.5,
+            walk_speed: 4.317,
+            sprint_speed: 5.612,
             noclip_speed: 10.0,
             acceleration: 28.0,
             deceleration: 34.0,

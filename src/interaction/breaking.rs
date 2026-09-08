@@ -1,4 +1,4 @@
-//! Player input and rules for instant block breaking.
+//! Progressive survival block breaking and direct inventory drops.
 
 use bevy::{
     prelude::*,
@@ -9,61 +9,152 @@ use crate::{
     block::{BlockId, BlockRegistry},
     chunk::ChunkStorage,
     coordinates::WorldBlockPos,
+    inventory::PlayerInventory,
+    item::{ItemId, ItemRegistry},
+    player::Player,
+    survival::{GameMode, Hunger},
 };
 
-use super::{CameraRaycast, InteractionSettings, input::DebouncedButtonInput};
+use super::{CameraRaycast, InteractionSettings};
 
-/// Debounces held left mouse input and remembers whether a click began while captured.
 #[derive(Debug, Default, Resource)]
-pub(super) struct BlockBreakInput(DebouncedButtonInput);
+pub(super) struct BlockBreakInput {
+    target: Option<WorldBlockPos>,
+    elapsed: f32,
+    cursor_was_captured: bool,
+    suppress_until_release: bool,
+}
 
+impl BlockBreakInput {
+    fn reset_progress(&mut self) {
+        self.target = None;
+        self.elapsed = 0.0;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn break_selected_block(
     time: Res<Time>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     cursor: Single<&CursorOptions, With<PrimaryWindow>>,
     settings: Res<InteractionSettings>,
+    mode: Res<GameMode>,
     registry: Res<BlockRegistry>,
+    item_registry: Res<ItemRegistry>,
     mut storage: ResMut<ChunkStorage>,
+    mut inventory: ResMut<PlayerInventory>,
+    mut hunger: Single<&mut Hunger, With<Player>>,
     mut selected: ResMut<CameraRaycast>,
     mut input: ResMut<BlockBreakInput>,
 ) {
     let cursor_captured = cursor.grab_mode != CursorGrabMode::None;
-    let should_break = input.0.update(
-        mouse_buttons.pressed(MouseButton::Left),
-        mouse_buttons.just_pressed(MouseButton::Left),
-        cursor_captured,
-        time.delta_secs(),
-        settings.break_repeat_interval,
-    );
-    if !should_break {
+    let pressed = mouse_buttons.pressed(MouseButton::Left);
+    if mouse_buttons.just_pressed(MouseButton::Left) && !input.cursor_was_captured {
+        input.suppress_until_release = true;
+    }
+    input.cursor_was_captured = cursor_captured;
+    if !pressed {
+        input.suppress_until_release = false;
+        input.reset_progress();
+        return;
+    }
+    if !cursor_captured || input.suppress_until_release {
+        input.reset_progress();
         return;
     }
 
     let Some(hit) = selected.0 else {
+        input.reset_progress();
         return;
     };
-    if try_break_block(&mut storage, &registry, hit.position) {
+    let Some(block) = storage.get_block(hit.position) else {
+        input.reset_progress();
+        return;
+    };
+    if block == BlockId::AIR || !registry.is_breakable(block) {
+        input.reset_progress();
+        return;
+    }
+
+    if input.target != Some(hit.position) {
+        input.target = Some(hit.position);
+        input.elapsed = 0.0;
+    }
+    input.elapsed += time.delta_secs().max(0.0);
+    let required = if *mode == GameMode::Creative {
+        0.0
+    } else {
+        (registry.definition(block).hardness * settings.survival_break_time_multiplier)
+            .max(settings.break_repeat_interval)
+    };
+    if input.elapsed < required {
+        return;
+    }
+
+    if let Some(broken) = take_breakable_block(&mut storage, &registry, hit.position) {
+        if *mode == GameMode::Survival {
+            if let Some(drop) = survival_drop(broken, hit.position, &item_registry) {
+                let remainder = inventory.add_item(drop, 1, &item_registry);
+                if remainder > 0 {
+                    warn!("Inventory full; dropped {:?} could not be collected", drop);
+                }
+            }
+            hunger.add_exhaustion(0.005);
+        }
         debug!(
             "Broke {:?} at ({}, {}, {})",
             hit.block, hit.position.x, hit.position.y, hit.position.z
         );
         selected.0 = None;
+        input.reset_progress();
     }
 }
 
+#[cfg(test)]
 fn try_break_block(
     storage: &mut ChunkStorage,
     registry: &BlockRegistry,
     position: WorldBlockPos,
 ) -> bool {
-    let Some(block) = storage.get_block(position) else {
-        return false;
-    };
+    take_breakable_block(storage, registry, position).is_some()
+}
+
+fn take_breakable_block(
+    storage: &mut ChunkStorage,
+    registry: &BlockRegistry,
+    position: WorldBlockPos,
+) -> Option<BlockId> {
+    let block = storage.get_block(position)?;
     if block == BlockId::AIR || !registry.is_breakable(block) {
-        return false;
+        return None;
     }
 
-    storage.set_block(position, BlockId::AIR).is_ok()
+    storage
+        .set_block(position, BlockId::AIR)
+        .ok()
+        .map(|_| block)
+}
+
+fn survival_drop(
+    block: BlockId,
+    position: WorldBlockPos,
+    registry: &ItemRegistry,
+) -> Option<ItemId> {
+    match block {
+        BlockId::GRASS => Some(ItemId::DIRT_BLOCK),
+        BlockId::LEAVES => leaves_drop_apple(position).then_some(ItemId::APPLE),
+        _ => registry.item_for_block(block),
+    }
+}
+
+fn leaves_drop_apple(position: WorldBlockPos) -> bool {
+    let mut hash = (position.x as u32).wrapping_mul(0x9e37_79b9)
+        ^ (position.y as u32).wrapping_mul(0x85eb_ca6b)
+        ^ (position.z as u32).wrapping_mul(0xc2b2_ae35);
+    hash ^= hash >> 16;
+    hash = hash.wrapping_mul(0x7feb_352d);
+    hash ^= hash >> 15;
+    hash.is_multiple_of(8)
 }
 
 #[cfg(test)]
@@ -110,5 +201,30 @@ mod tests {
         assert!(!try_break_block(&mut storage, &registry, water));
         assert_eq!(storage.get_block(water), Some(BlockId::WATER));
         assert!(!storage.get_chunk(chunk).unwrap().is_dirty());
+    }
+
+    #[test]
+    fn grass_drops_dirt_and_regular_blocks_drop_their_item() {
+        let registry = ItemRegistry::default();
+        let position = WorldBlockPos::new(3, 4, 5);
+
+        assert_eq!(
+            survival_drop(BlockId::GRASS, position, &registry),
+            Some(ItemId::DIRT_BLOCK)
+        );
+        assert_eq!(
+            survival_drop(BlockId::WOOD, position, &registry),
+            Some(ItemId::WOOD_BLOCK)
+        );
+    }
+
+    #[test]
+    fn leaf_apple_drop_is_deterministic_and_uncommon() {
+        let drops = (0..64)
+            .filter(|&x| leaves_drop_apple(WorldBlockPos::new(x, 10, 3)))
+            .count();
+
+        assert!(drops > 0);
+        assert!(drops < 20);
     }
 }

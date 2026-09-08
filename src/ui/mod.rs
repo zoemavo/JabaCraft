@@ -2,6 +2,8 @@
 
 mod crosshair;
 mod inventory_panel;
+mod item_icons;
+mod survival_hud;
 
 use bevy::prelude::*;
 
@@ -10,11 +12,13 @@ use crate::{
     item::ItemRegistry,
 };
 
-const SLOT_SIZE: f32 = 58.0;
-const ICON_SIZE: f32 = 38.0;
-const SELECTED_COLOR: Color = Color::srgb(1.0, 0.82, 0.2);
-const UNSELECTED_COLOR: Color = Color::srgba(0.72, 0.74, 0.78, 0.9);
-const EMPTY_ICON_COLOR: Color = Color::srgb(0.11, 0.12, 0.14);
+use item_icons::{ItemIconAssets, set_item_icon};
+
+const UI_SCALE: f32 = 1.5;
+const SLOT_SIZE: f32 = 40.0 * UI_SCALE;
+const ICON_SIZE: f32 = 32.0 * UI_SCALE;
+const HOTBAR_WIDTH: f32 = 364.0 * UI_SCALE;
+const HOTBAR_HEIGHT: f32 = 44.0 * UI_SCALE;
 
 /// Runtime switches for future HUD and menu presentation.
 #[derive(Debug, Default, Resource)]
@@ -23,13 +27,16 @@ pub struct UiSettings {
 }
 
 #[derive(Component)]
-struct HotbarSlotView(usize);
-
-#[derive(Component)]
 struct HotbarIconView(usize);
 
 #[derive(Component)]
+struct HotbarSelectionView(usize);
+
+#[derive(Component)]
 struct HotbarCountView(usize);
+
+#[derive(Component)]
+struct HotbarSelectedName;
 
 #[derive(Component)]
 struct HotbarRoot;
@@ -43,9 +50,11 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Startup,
                 (
+                    item_icons::load_item_icons,
                     spawn_hotbar,
                     inventory_panel::spawn_inventory_panel,
                     crosshair::spawn_crosshair,
+                    survival_hud::spawn_survival_hud,
                 ),
             )
             .add_systems(Update, inventory_panel::handle_inventory_clicks)
@@ -55,13 +64,15 @@ impl Plugin for UiPlugin {
                     sync_hotbar_ui,
                     inventory_panel::sync_inventory_panel,
                     inventory_panel::follow_cursor_stack,
+                    inventory_panel::sync_item_tooltip,
                     crosshair::sync_crosshair_visibility,
+                    survival_hud::sync_survival_hud,
                 ),
             );
     }
 }
 
-fn spawn_hotbar(mut commands: Commands) {
+fn spawn_hotbar(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn((
             Name::new("Hotbar Root"),
@@ -70,6 +81,7 @@ fn spawn_hotbar(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(18.0),
                 width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
@@ -78,16 +90,33 @@ fn spawn_hotbar(mut commands: Commands) {
         ))
         .with_children(|root| {
             root.spawn((
-                Name::new("Hotbar"),
-                Node {
-                    height: Val::Px(SLOT_SIZE + 12.0),
-                    padding: UiRect::all(Val::Px(6.0)),
-                    column_gap: Val::Px(5.0),
-                    align_items: AlignItems::Center,
-                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                Name::new("Selected Item Name"),
+                HotbarSelectedName,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(18.0),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.035, 0.04, 0.05, 0.82)),
+                TextColor(Color::WHITE),
+                TextShadow {
+                    offset: Vec2::splat(2.0),
+                    color: Color::BLACK,
+                },
+                Node {
+                    margin: UiRect::bottom(Val::Px(5.0)),
+                    ..default()
+                },
+            ));
+            root.spawn((
+                Name::new("Hotbar"),
+                ImageNode::new(asset_server.load("ui/faithful_hotbar.png")),
+                Node {
+                    position_type: PositionType::Relative,
+                    width: Val::Px(HOTBAR_WIDTH),
+                    height: Val::Px(HOTBAR_HEIGHT),
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
             ))
             .with_children(|bar| {
                 for index in 0..HOTBAR_SLOT_COUNT {
@@ -101,47 +130,39 @@ fn spawn_hotbar_slot(parent: &mut ChildSpawnerCommands, index: usize) {
     parent
         .spawn((
             Name::new(format!("Hotbar Slot {}", index + 1)),
-            HotbarSlotView(index),
             Node {
-                position_type: PositionType::Relative,
+                position_type: PositionType::Absolute,
+                left: Val::Px((2.0 + index as f32 * 40.0) * UI_SCALE),
+                top: Val::Px(2.0 * UI_SCALE),
                 width: Val::Px(SLOT_SIZE),
                 height: Val::Px(SLOT_SIZE),
-                border: UiRect::all(Val::Px(2.0)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                border_radius: BorderRadius::all(Val::Px(4.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.10, 0.11, 0.13, 0.94)),
-            BorderColor::all(UNSELECTED_COLOR),
-            Outline::new(Val::Px(2.0), Val::Px(1.0), Color::NONE),
         ))
         .with_children(|slot| {
             slot.spawn((
-                Name::new("Block Color Placeholder"),
+                Name::new("Hotbar Selection"),
+                HotbarSelectionView(index),
+                ImageNode::new(Handle::default()),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(-4.0 * UI_SCALE),
+                    top: Val::Px(-3.0 * UI_SCALE),
+                    width: Val::Px(48.0 * UI_SCALE),
+                    height: Val::Px(46.0 * UI_SCALE),
+                    ..default()
+                },
+                Visibility::Hidden,
+            ));
+            slot.spawn((
+                Name::new("Item Icon"),
                 HotbarIconView(index),
+                ImageNode::default(),
                 Node {
                     width: Val::Px(ICON_SIZE),
                     height: Val::Px(ICON_SIZE),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
-                    ..default()
-                },
-                BackgroundColor(EMPTY_ICON_COLOR),
-                BorderColor::all(Color::srgba(0.02, 0.02, 0.025, 0.9)),
-            ));
-            slot.spawn((
-                Name::new("Slot Number"),
-                Text::new((index + 1).to_string()),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
-                TextColor(Color::srgba(0.9, 0.92, 0.96, 0.9)),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(3.0),
-                    top: Val::Px(1.0),
                     ..default()
                 },
             ));
@@ -171,11 +192,17 @@ fn spawn_hotbar_slot(parent: &mut ChildSpawnerCommands, index: usize) {
 fn sync_hotbar_ui(
     inventory: Res<PlayerInventory>,
     inventory_state: Res<InventoryState>,
+    icon_assets: Res<ItemIconAssets>,
     registry: Res<ItemRegistry>,
     mut root: Single<&mut Node, With<HotbarRoot>>,
-    mut slots: Query<(&HotbarSlotView, &mut BorderColor, &mut Outline)>,
-    mut icons: Query<(&HotbarIconView, &mut BackgroundColor)>,
-    mut counts: Query<(&HotbarCountView, &mut Text)>,
+    mut selections: Query<
+        (&HotbarSelectionView, &mut ImageNode, &mut Visibility),
+        Without<HotbarIconView>,
+    >,
+    mut icons: Query<(&HotbarIconView, &mut ImageNode), Without<HotbarSelectionView>>,
+    mut counts: Query<(&HotbarCountView, &mut Text), Without<HotbarSelectedName>>,
+    mut selected_name: Single<&mut Text, (With<HotbarSelectedName>, Without<HotbarCountView>)>,
+    asset_server: Res<AssetServer>,
 ) {
     root.display = if inventory_state.is_open() {
         Display::None
@@ -187,28 +214,21 @@ fn sync_hotbar_ui(
         return;
     }
 
-    for (view, mut border, mut outline) in &mut slots {
-        let selected = view.0 == inventory.selected_hotbar_index();
-        *border = BorderColor::all(if selected {
-            SELECTED_COLOR
+    for (view, mut image, mut visibility) in &mut selections {
+        image.image = asset_server.load("ui/faithful_hotbar_selection.png");
+        *visibility = if view.0 == inventory.selected_hotbar_index() {
+            Visibility::Visible
         } else {
-            UNSELECTED_COLOR
-        });
-        outline.color = if selected {
-            SELECTED_COLOR
-        } else {
-            Color::NONE
+            Visibility::Hidden
         };
     }
 
-    for (view, mut background) in &mut icons {
-        background.0 = inventory
-            .slot(view.0)
-            .map(|stack| {
-                let [red, green, blue, alpha] = registry.debug_color(stack.item());
-                Color::srgba(red, green, blue, alpha)
-            })
-            .unwrap_or(EMPTY_ICON_COLOR);
+    for (view, mut image) in &mut icons {
+        set_item_icon(
+            &mut image,
+            &icon_assets,
+            inventory.slot(view.0).map(|stack| stack.item()),
+        );
     }
 
     for (view, mut text) in &mut counts {
@@ -217,4 +237,9 @@ fn sync_hotbar_ui(
             .map(|stack| stack.count().to_string())
             .unwrap_or_default();
     }
+
+    selected_name.0 = inventory
+        .selected_stack()
+        .map(|stack| registry.definition(stack.item()).name.to_owned())
+        .unwrap_or_default();
 }
