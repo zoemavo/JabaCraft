@@ -1,6 +1,7 @@
 //! Block targeting and player-world interaction systems.
 
 mod breaking;
+mod cracks;
 mod input;
 mod outline;
 mod placing;
@@ -87,7 +88,13 @@ impl Plugin for InteractionPlugin {
             .init_resource::<breaking::BlockBreakInput>()
             .init_resource::<placing::BlockPlaceInput>()
             .init_gizmo_group::<outline::BlockOutlineGizmos>()
-            .add_systems(Startup, outline::configure_block_outline)
+            .add_systems(
+                Startup,
+                (
+                    outline::configure_block_outline,
+                    cracks::spawn_block_crack_overlay,
+                ),
+            )
             .add_systems(
                 PostUpdate,
                 (
@@ -95,6 +102,7 @@ impl Plugin for InteractionPlugin {
                     breaking::break_selected_block,
                     placing::place_selected_block,
                     outline::draw_block_outline,
+                    cracks::sync_block_crack_overlay,
                 )
                     .chain()
                     .after(TransformSystems::Propagate),

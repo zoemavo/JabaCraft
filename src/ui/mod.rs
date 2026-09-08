@@ -74,7 +74,7 @@ impl Plugin for UiPlugin {
                     inventory_panel::sync_recipe_buttons,
                     inventory_panel::follow_cursor_stack,
                     inventory_panel::sync_item_tooltip,
-                    crosshair::sync_crosshair,
+                    crosshair::sync_crosshair_visibility,
                     survival_hud::sync_survival_hud,
                     first_person_hand::sync_first_person_hand,
                 ),
