@@ -41,9 +41,9 @@ mod tests {
     fn every_builtin_item_maps_inside_the_icon_atlas() {
         for item in ItemId::ALL {
             let index = u32::from(item.as_u16());
-            assert!(index < 12);
+            assert!(index < 16);
             assert!(index % ATLAS_COLUMNS < ATLAS_COLUMNS);
-            assert!(index / ATLAS_COLUMNS < 3);
+            assert!(index / ATLAS_COLUMNS < 4);
         }
     }
 }

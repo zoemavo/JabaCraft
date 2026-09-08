@@ -13,7 +13,7 @@ pub enum InventoryClick {
 }
 
 /// All player-owned inventory slots plus the stack currently carried by the cursor.
-#[derive(Debug, Resource)]
+#[derive(Clone, Debug, Resource)]
 pub struct PlayerInventory {
     slots: [Option<ItemStack>; TOTAL_SLOT_COUNT],
     selected_hotbar: usize,
@@ -107,6 +107,34 @@ impl PlayerInventory {
         }
 
         count
+    }
+
+    pub fn item_count(&self, item: ItemId) -> u32 {
+        self.slots
+            .iter()
+            .flatten()
+            .filter(|stack| stack.item() == item)
+            .map(ItemStack::count)
+            .sum()
+    }
+
+    /// Removes up to `count` items from inventory slots and returns the amount removed.
+    /// Cursor-held items are intentionally excluded from crafting and consumption.
+    pub fn remove_item(&mut self, item: ItemId, mut count: u32) -> u32 {
+        let requested = count;
+        for slot in &mut self.slots {
+            let Some(stack) = slot.as_mut().filter(|stack| stack.item() == item) else {
+                continue;
+            };
+            count -= stack.remove(count);
+            if stack.is_empty() {
+                *slot = None;
+            }
+            if count == 0 {
+                break;
+            }
+        }
+        requested - count
     }
 
     pub fn clear(&mut self) {
@@ -413,5 +441,18 @@ mod tests {
             .fill(Some(block_stack(ItemId::DIRT_BLOCK, 64)));
 
         assert_eq!(inventory.add_item(ItemId::APPLE, 2, &registry), 2);
+    }
+
+    #[test]
+    fn counting_and_removing_items_spans_stacks_without_touching_cursor() {
+        let mut inventory = empty_inventory();
+        inventory.slots[0] = Some(block_stack(ItemId::WOOD_BLOCK, 40));
+        inventory.slots[3] = Some(block_stack(ItemId::WOOD_BLOCK, 30));
+        inventory.cursor_held = Some(block_stack(ItemId::WOOD_BLOCK, 7));
+
+        assert_eq!(inventory.item_count(ItemId::WOOD_BLOCK), 70);
+        assert_eq!(inventory.remove_item(ItemId::WOOD_BLOCK, 50), 50);
+        assert_eq!(inventory.item_count(ItemId::WOOD_BLOCK), 20);
+        assert_eq!(inventory.cursor_held_stack().unwrap().count(), 7);
     }
 }

@@ -1,4 +1,4 @@
-//! Progressive survival block breaking and direct inventory drops.
+//! Progressive survival block breaking and world-space item drops.
 
 use bevy::{
     prelude::*,
@@ -10,7 +10,7 @@ use crate::{
     chunk::ChunkStorage,
     coordinates::WorldBlockPos,
     inventory::PlayerInventory,
-    item::{ItemId, ItemRegistry},
+    item::{DroppedItemAssets, ItemId, ItemRegistry, ToolProperties, spawn_dropped_item},
     player::Player,
     survival::{GameMode, Hunger},
 };
@@ -30,10 +30,19 @@ impl BlockBreakInput {
         self.target = None;
         self.elapsed = 0.0;
     }
+
+    fn advance(&mut self, target: WorldBlockPos, delta: f32) {
+        if self.target != Some(target) {
+            self.target = Some(target);
+            self.elapsed = 0.0;
+        }
+        self.elapsed += delta.max(0.0);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn break_selected_block(
+    mut commands: Commands,
     time: Res<Time>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     cursor: Single<&CursorOptions, With<PrimaryWindow>>,
@@ -41,8 +50,9 @@ pub(super) fn break_selected_block(
     mode: Res<GameMode>,
     registry: Res<BlockRegistry>,
     item_registry: Res<ItemRegistry>,
+    dropped_item_assets: Res<DroppedItemAssets>,
     mut storage: ResMut<ChunkStorage>,
-    mut inventory: ResMut<PlayerInventory>,
+    inventory: Res<PlayerInventory>,
     mut hunger: Single<&mut Hunger, With<Player>>,
     mut selected: ResMut<CameraRaycast>,
     mut input: ResMut<BlockBreakInput>,
@@ -82,16 +92,19 @@ pub(super) fn break_selected_block(
         return;
     }
 
-    if input.target != Some(hit.position) {
-        input.target = Some(hit.position);
-        input.elapsed = 0.0;
-    }
-    input.elapsed += time.delta_secs().max(0.0);
+    input.advance(hit.position, time.delta_secs());
+    let held_tool = inventory
+        .selected_stack()
+        .and_then(|stack| item_registry.tool(stack.item()));
     let required = if *mode == GameMode::Creative {
         0.0
     } else {
-        (registry.definition(block).hardness * settings.survival_break_time_multiplier)
-            .max(settings.break_repeat_interval)
+        mining_duration(
+            registry.definition(block).hardness,
+            settings.survival_break_time_multiplier,
+            settings.break_repeat_interval,
+            held_tool,
+        )
     };
     mining_progress.update(input.elapsed, required);
     if input.elapsed < required {
@@ -101,10 +114,15 @@ pub(super) fn break_selected_block(
     if let Some(broken) = take_breakable_block(&mut storage, &registry, hit.position) {
         if *mode == GameMode::Survival {
             if let Some(drop) = survival_drop(broken, hit.position, &item_registry) {
-                let remainder = inventory.add_item(drop, 1, &item_registry);
-                if remainder > 0 {
-                    warn!("Inventory full; dropped {:?} could not be collected", drop);
-                }
+                let stack = item_registry
+                    .create_stack(drop, 1)
+                    .expect("single block drops fit their item stack limit");
+                let center = Vec3::new(
+                    hit.position.x as f32 + 0.5,
+                    hit.position.y as f32 + 0.55,
+                    hit.position.z as f32 + 0.5,
+                );
+                spawn_dropped_item(&mut commands, &dropped_item_assets, stack, center);
             }
             hunger.add_exhaustion(0.005);
         }
@@ -116,6 +134,16 @@ pub(super) fn break_selected_block(
         input.reset_progress();
         mining_progress.reset();
     }
+}
+
+fn mining_duration(
+    hardness: f32,
+    base_multiplier: f32,
+    minimum: f32,
+    tool: Option<ToolProperties>,
+) -> f32 {
+    let mining_speed = tool.map_or(1.0, |properties| properties.mining_speed.max(1.0));
+    (hardness.max(0.0) * base_multiplier.max(0.0) / mining_speed).max(minimum.max(0.0))
 }
 
 #[cfg(test)]
@@ -234,5 +262,61 @@ mod tests {
 
         assert!(drops > 0);
         assert!(drops < 20);
+    }
+
+    #[test]
+    fn changing_target_resets_accumulated_mining_time() {
+        let first = WorldBlockPos::new(1, 2, 3);
+        let second = WorldBlockPos::new(2, 2, 3);
+        let mut input = BlockBreakInput::default();
+
+        input.advance(first, 0.4);
+        input.advance(first, 0.3);
+        assert!((input.elapsed - 0.7).abs() < 0.0001);
+        input.advance(second, 0.1);
+
+        assert_eq!(input.target, Some(second));
+        assert!((input.elapsed - 0.1).abs() < 0.0001);
+    }
+
+    #[test]
+    fn stone_is_noticeably_slower_than_dirt_by_hand() {
+        let blocks = BlockRegistry::default();
+        let settings = InteractionSettings::default();
+        let dirt = mining_duration(
+            blocks.definition(BlockId::DIRT).hardness,
+            settings.survival_break_time_multiplier,
+            settings.break_repeat_interval,
+            None,
+        );
+        let stone = mining_duration(
+            blocks.definition(BlockId::STONE).hardness,
+            settings.survival_break_time_multiplier,
+            settings.break_repeat_interval,
+            None,
+        );
+
+        assert!(stone >= dirt * 2.5);
+    }
+
+    #[test]
+    fn stone_pickaxe_accelerates_mining() {
+        let blocks = BlockRegistry::default();
+        let items = ItemRegistry::default();
+        let settings = InteractionSettings::default();
+        let hand = mining_duration(
+            blocks.definition(BlockId::STONE).hardness,
+            settings.survival_break_time_multiplier,
+            settings.break_repeat_interval,
+            None,
+        );
+        let pickaxe = mining_duration(
+            blocks.definition(BlockId::STONE).hardness,
+            settings.survival_break_time_multiplier,
+            settings.break_repeat_interval,
+            items.tool(ItemId::STONE_PICKAXE),
+        );
+
+        assert!(pickaxe < hand);
     }
 }

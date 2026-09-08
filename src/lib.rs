@@ -4,6 +4,7 @@ pub mod app;
 pub mod block;
 pub mod chunk;
 pub mod coordinates;
+pub mod crafting;
 pub mod game;
 pub mod generation;
 pub mod interaction;

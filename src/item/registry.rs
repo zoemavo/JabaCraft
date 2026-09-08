@@ -4,7 +4,7 @@ use crate::block::BlockId;
 
 use super::{
     BLOCK_ITEM_MAX_STACK_SIZE, BUILTIN_ITEM_COUNT, FoodProperties, ItemDefinition, ItemId,
-    ItemStack, ItemStackError,
+    ItemStack, ItemStackError, ToolProperties, ToolType,
 };
 
 /// Central source of item metadata and block-item mappings.
@@ -34,6 +34,10 @@ impl ItemRegistry {
 
     pub fn food(&self, id: ItemId) -> Option<FoodProperties> {
         self.definition(id).food
+    }
+
+    pub fn tool(&self, id: ItemId) -> Option<ToolProperties> {
+        self.definition(id).tool
     }
 
     pub fn max_stack_size(&self, id: ItemId) -> u32 {
@@ -67,6 +71,7 @@ impl Default for ItemRegistry {
                     max_stack_size: 64,
                     block: None,
                     food: None,
+                    tool: None,
                     debug_color: [0.55, 0.34, 0.15, 1.0],
                 },
                 ItemDefinition {
@@ -77,7 +82,27 @@ impl Default for ItemRegistry {
                         nutrition: 4,
                         saturation: 2.4,
                     }),
+                    tool: None,
                     debug_color: [0.82, 0.05, 0.04, 1.0],
+                },
+                ItemDefinition {
+                    name: "Oak Planks",
+                    max_stack_size: 64,
+                    block: None,
+                    food: None,
+                    tool: None,
+                    debug_color: [0.64, 0.45, 0.24, 1.0],
+                },
+                ItemDefinition {
+                    name: "Stone Pickaxe",
+                    max_stack_size: 1,
+                    block: None,
+                    food: None,
+                    tool: Some(ToolProperties {
+                        tool_type: ToolType::Pickaxe,
+                        mining_speed: 4.0,
+                    }),
+                    debug_color: [0.43, 0.43, 0.43, 1.0],
                 },
             ],
         }
@@ -90,6 +115,7 @@ const fn block_item(name: &'static str, block: BlockId, debug_color: [f32; 4]) -
         max_stack_size: BLOCK_ITEM_MAX_STACK_SIZE,
         block: Some(block),
         food: None,
+        tool: None,
         debug_color,
     }
 }
@@ -148,5 +174,21 @@ mod tests {
         assert_eq!(stack.item(), ItemId::STONE_BLOCK);
         assert_eq!(stack.count(), 12);
         assert_eq!(stack.max_stack_size(), BLOCK_ITEM_MAX_STACK_SIZE);
+    }
+
+    #[test]
+    fn stone_pickaxe_is_an_unstackable_fast_pickaxe() {
+        let registry = ItemRegistry::default();
+        let definition = registry.definition(ItemId::STONE_PICKAXE);
+
+        assert_eq!(definition.max_stack_size, 1);
+        assert_eq!(definition.block, None);
+        assert_eq!(
+            definition.tool,
+            Some(ToolProperties {
+                tool_type: ToolType::Pickaxe,
+                mining_speed: 4.0,
+            })
+        );
     }
 }

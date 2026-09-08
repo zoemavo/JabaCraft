@@ -59,15 +59,22 @@ impl Plugin for UiPlugin {
                     first_person_hand::spawn_first_person_hand,
                 ),
             )
-            .add_systems(Update, inventory_panel::handle_inventory_clicks)
+            .add_systems(
+                Update,
+                (
+                    inventory_panel::handle_inventory_clicks,
+                    inventory_panel::handle_recipe_clicks,
+                ),
+            )
             .add_systems(
                 Last,
                 (
                     sync_hotbar_ui,
                     inventory_panel::sync_inventory_panel,
+                    inventory_panel::sync_recipe_buttons,
                     inventory_panel::follow_cursor_stack,
                     inventory_panel::sync_item_tooltip,
-                    crosshair::sync_crosshair_visibility,
+                    crosshair::sync_crosshair,
                     survival_hud::sync_survival_hud,
                     first_person_hand::sync_first_person_hand,
                 ),

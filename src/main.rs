@@ -1,6 +1,7 @@
 use bevy::{prelude::*, window::PresentMode};
 use rustcraft::{
     app::{APP_TITLE, AppPlugin},
+    crafting::CraftingPlugin,
     game::GamePlugin,
     interaction::InteractionPlugin,
     inventory::InventoryPlugin,
@@ -37,6 +38,7 @@ fn main() {
             ScenePlugin,
             ItemPlugin,
             InventoryPlugin,
+            CraftingPlugin,
             SurvivalPlugin,
             InteractionPlugin,
             PersistencePlugin,

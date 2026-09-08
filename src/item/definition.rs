@@ -7,6 +7,17 @@ pub struct FoodProperties {
     pub saturation: f32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolType {
+    Pickaxe,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToolProperties {
+    pub tool_type: ToolType,
+    pub mining_speed: f32,
+}
+
 /// Central metadata for an inventory item.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ItemDefinition {
@@ -15,6 +26,7 @@ pub struct ItemDefinition {
     /// Voxel placed by this item, or None for non-block items.
     pub block: Option<BlockId>,
     pub food: Option<FoodProperties>,
-    /// Temporary UI color used until dedicated item icons are available.
+    pub tool: Option<ToolProperties>,
+    /// Lightweight world-drop tint and fallback presentation color.
     pub debug_color: [f32; 4],
 }

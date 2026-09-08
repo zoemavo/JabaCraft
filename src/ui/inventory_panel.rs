@@ -1,7 +1,11 @@
 use bevy::{prelude::*, window::PrimaryWindow};
 
-use crate::inventory::{
-    HOTBAR_SLOT_COUNT, INVENTORY_SLOT_COUNT, InventoryClick, InventoryState, PlayerInventory,
+use crate::{
+    crafting::{RecipeId, RecipeRegistry, can_craft, craft},
+    inventory::{
+        HOTBAR_SLOT_COUNT, INVENTORY_SLOT_COUNT, InventoryClick, InventoryState, PlayerInventory,
+    },
+    item::ItemRegistry,
 };
 
 use super::item_icons::{ItemIconAssets, set_item_icon};
@@ -17,6 +21,9 @@ const STORAGE_TOP: f32 = 166.0 * UI_SCALE;
 const HOTBAR_TOP: f32 = 282.0 * UI_SCALE;
 const HOVER_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.32);
 const EMPTY_COLOR: Color = Color::srgb(0.10, 0.11, 0.13);
+const RECIPE_READY_COLOR: Color = Color::srgba(0.18, 0.45, 0.18, 0.94);
+const RECIPE_HOVER_COLOR: Color = Color::srgba(0.28, 0.62, 0.28, 0.98);
+const RECIPE_UNAVAILABLE_COLOR: Color = Color::srgba(0.18, 0.18, 0.18, 0.88);
 
 #[derive(Component)]
 pub(super) struct InventoryPanelRoot;
@@ -45,7 +52,14 @@ pub(super) struct ItemTooltip;
 #[derive(Component)]
 pub(super) struct ItemTooltipText;
 
-pub(super) fn spawn_inventory_panel(mut commands: Commands, asset_server: Res<AssetServer>) {
+#[derive(Component)]
+pub(super) struct RecipeButtonView(RecipeId);
+
+pub(super) fn spawn_inventory_panel(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    recipes: Res<RecipeRegistry>,
+) {
     commands
         .spawn((
             Name::new("Inventory Overlay"),
@@ -76,6 +90,7 @@ pub(super) fn spawn_inventory_panel(mut commands: Commands, asset_server: Res<As
                 ))
                 .with_children(|panel| {
                     spawn_player_preview(panel, &asset_server);
+                    spawn_recipe_list(panel, &recipes);
                     spawn_slot_grid(
                         panel,
                         "Inventory Storage Grid",
@@ -173,6 +188,64 @@ pub(super) fn spawn_inventory_panel(mut commands: Commands, asset_server: Res<As
                 color: Color::BLACK,
             },
         ));
+}
+
+fn spawn_recipe_list(parent: &mut ChildSpawnerCommands, recipes: &RecipeRegistry) {
+    parent
+        .spawn((
+            Name::new("Shapeless Recipes"),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(154.0 * UI_SCALE),
+                top: Val::Px(16.0 * UI_SCALE),
+                width: Val::Px(184.0 * UI_SCALE),
+                height: Val::Px(140.0 * UI_SCALE),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(3.0 * UI_SCALE),
+                padding: UiRect::all(Val::Px(3.0 * UI_SCALE)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.03, 0.03, 0.03, 0.78)),
+        ))
+        .with_children(|list| {
+            list.spawn((
+                Text::new("Recipes"),
+                TextFont {
+                    font_size: FontSize::Px(13.0 * UI_SCALE),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Node {
+                    height: Val::Px(18.0 * UI_SCALE),
+                    ..default()
+                },
+            ));
+            for (index, recipe) in recipes.recipes().iter().enumerate() {
+                list.spawn((
+                    Name::new(format!("Craft {}", recipe.name)),
+                    Button,
+                    RecipeButtonView(RecipeId(index)),
+                    Text::new(recipe.name),
+                    TextFont {
+                        font_size: FontSize::Px(11.0 * UI_SCALE),
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    TextLayout::justify(Justify::Center),
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(33.0 * UI_SCALE),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.0 * UI_SCALE)),
+                        ..default()
+                    },
+                    BackgroundColor(RECIPE_UNAVAILABLE_COLOR),
+                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.32)),
+                ));
+            }
+        });
 }
 
 fn spawn_player_preview(parent: &mut ChildSpawnerCommands, assets: &AssetServer) {
@@ -405,6 +478,58 @@ pub(super) fn handle_inventory_clicks(
     }
 }
 
+pub(super) fn handle_recipe_clicks(
+    state: Res<InventoryState>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    recipes: Res<RecipeRegistry>,
+    items: Res<ItemRegistry>,
+    buttons: Query<(&Interaction, &RecipeButtonView)>,
+    mut inventory: ResMut<PlayerInventory>,
+) {
+    if !state.is_open() || !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    let Some(recipe_id) = buttons
+        .iter()
+        .find(|(interaction, _)| {
+            matches!(**interaction, Interaction::Pressed | Interaction::Hovered)
+        })
+        .map(|(_, button)| button.0)
+    else {
+        return;
+    };
+    if let Some(recipe) = recipes.get(recipe_id) {
+        craft(&mut inventory, recipe, &items);
+    }
+}
+
+pub(super) fn sync_recipe_buttons(
+    inventory: Res<PlayerInventory>,
+    recipes: Res<RecipeRegistry>,
+    mut buttons: Query<(
+        &RecipeButtonView,
+        &Interaction,
+        &mut BackgroundColor,
+        &mut Text,
+    )>,
+) {
+    for (button, interaction, mut background, mut text) in &mut buttons {
+        let Some(recipe) = recipes.get(button.0) else {
+            continue;
+        };
+        let available = can_craft(&inventory, recipe);
+        background.0 = if !available {
+            RECIPE_UNAVAILABLE_COLOR
+        } else if matches!(interaction, Interaction::Hovered | Interaction::Pressed) {
+            RECIPE_HOVER_COLOR
+        } else {
+            RECIPE_READY_COLOR
+        };
+        text.0 = recipe.name.to_owned();
+    }
+}
+
 pub(super) fn sync_inventory_panel(
     state: Res<InventoryState>,
     inventory: Res<PlayerInventory>,
@@ -447,7 +572,7 @@ pub(super) fn sync_inventory_panel(
 pub(super) fn sync_item_tooltip(
     state: Res<InventoryState>,
     inventory: Res<PlayerInventory>,
-    registry: Res<crate::item::ItemRegistry>,
+    registry: Res<ItemRegistry>,
     window: Single<&Window, With<PrimaryWindow>>,
     slots: Query<(&Interaction, &InventorySlotView)>,
     mut tooltip: Single<&mut Node, With<ItemTooltip>>,
