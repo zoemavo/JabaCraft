@@ -21,7 +21,9 @@ pub struct AppPlugin;
 impl Plugin for AppPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AppMetadata>()
-            .insert_resource(ClearColor(Color::srgb(0.38, 0.62, 0.88)))
+            // Matches the procedural skybox horizon and remains as a graceful
+            // fallback while its generated cubemap is uploaded.
+            .insert_resource(ClearColor(crate::scene::SKY_COLOR))
             .add_systems(Startup, log_startup);
     }
 }

@@ -1,6 +1,11 @@
 //! Bootstrap entities shared by the playable 3D scene.
 
+mod environment;
+
 use bevy::{core_pipeline::tonemapping::Tonemapping, prelude::*};
+
+pub(crate) use environment::SKY_COLOR;
+use environment::{distance_fog, skybox, spawn_environment};
 
 use crate::{
     generation::{GenerationSettings, terrain_height_at},
@@ -24,12 +29,24 @@ fn setup_scene(
     mut commands: Commands,
     player_settings: Res<PlayerSettings>,
     generation_settings: Res<GenerationSettings>,
+    mut images: ResMut<Assets<Image>>,
 ) {
-    spawn_player(&mut commands, &player_settings, generation_settings.seed);
+    let skybox_image = spawn_environment(&mut images);
+    spawn_player(
+        &mut commands,
+        &player_settings,
+        generation_settings.seed,
+        skybox_image,
+    );
     info!("Playable voxel scene initialized");
 }
 
-fn spawn_player(commands: &mut Commands, settings: &PlayerSettings, terrain_seed: u64) {
+fn spawn_player(
+    commands: &mut Commands,
+    settings: &PlayerSettings,
+    terrain_seed: u64,
+    skybox_image: Handle<Image>,
+) {
     let collider = PlayerCollider::from_dimensions(settings.player_width, settings.player_height);
     let spawn_x = 8.0;
     let spawn_z = 10.0;
@@ -67,6 +84,8 @@ fn spawn_player(commands: &mut Commands, settings: &PlayerSettings, terrain_seed
                 // Keep bright voxel colors from clipping while preserving
                 // detail in the darker propagated-light levels.
                 Tonemapping::AcesFitted,
+                skybox(skybox_image),
+                distance_fog(),
                 Projection::from(PerspectiveProjection {
                     fov: 60.0_f32.to_radians(),
                     ..default()

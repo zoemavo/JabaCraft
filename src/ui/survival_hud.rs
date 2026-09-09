@@ -130,7 +130,7 @@ fn spawn_vital_row(
 
 pub(super) fn sync_survival_hud(
     inventory_state: Res<InventoryState>,
-    stats: Single<(Ref<Health>, Ref<Hunger>), With<Player>>,
+    stats: Single<(&Health, &Hunger), With<Player>>,
     assets: Res<AssetServer>,
     mut root: Single<&mut Node, With<SurvivalHudRoot>>,
     mut fills: Query<(&VitalFill, &mut ImageNode, &mut Visibility)>,
@@ -142,9 +142,6 @@ pub(super) fn sync_survival_hud(
     };
 
     let (health, hunger) = stats.into_inner();
-    if !health.is_changed() && !hunger.is_changed() && !inventory_state.is_changed() {
-        return;
-    }
 
     for (fill, mut image, mut visibility) in &mut fills {
         let value = match fill.kind {
@@ -200,6 +197,21 @@ mod tests {
         assert_eq!(icon_fill(5.0, 1), IconFill::Full);
         assert_eq!(icon_fill(5.0, 2), IconFill::Half);
         assert_eq!(icon_fill(5.0, 3), IconFill::Empty);
+    }
+
+    #[test]
+    fn damaged_health_and_consumed_food_change_visible_icon_states() {
+        let mut health = Health::default();
+        let mut hunger = Hunger::default();
+
+        health.damage(3.0);
+        hunger.add_exhaustion(24.0);
+
+        assert_eq!(health.current(), 17.0);
+        assert_eq!(icon_fill(health.current(), 8), IconFill::Half);
+        assert_eq!(icon_fill(health.current(), 9), IconFill::Empty);
+        assert_eq!(hunger.food_level(), 19);
+        assert_eq!(icon_fill(f32::from(hunger.food_level()), 9), IconFill::Half);
     }
 
     #[test]
