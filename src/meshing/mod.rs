@@ -7,7 +7,10 @@ mod voxel;
 
 use bevy::prelude::*;
 
-use crate::generation::ChunkStreamingSet;
+use crate::{
+    generation::ChunkStreamingSet,
+    scene::{EnvironmentUpdateSet, WorldLightTint},
+};
 
 pub use renderer::{ChunkMesh, ChunkRenderer};
 
@@ -41,7 +44,13 @@ impl Plugin for ChunkMeshingPlugin {
         app.init_resource::<MeshingSettings>()
             .init_resource::<ChunkRenderer>()
             .add_systems(Startup, create_chunk_material)
-            .add_systems(Update, sync_chunk_renderer.after(ChunkStreamingSet));
+            .add_systems(
+                Update,
+                (
+                    sync_chunk_renderer.after(ChunkStreamingSet),
+                    update_chunk_light_tint.after(EnvironmentUpdateSet),
+                ),
+            );
     }
 }
 
@@ -49,19 +58,37 @@ fn create_chunk_material(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    light_tint: Res<WorldLightTint>,
 ) {
     let atlas = images.add(create_block_texture_atlas());
     commands.insert_resource(ChunkMaterial(materials.add(StandardMaterial {
-        base_color: Color::WHITE,
+        base_color: Color::srgb(light_tint.0[0], light_tint.0[1], light_tint.0[2]),
         base_color_texture: Some(atlas),
         alpha_mode: AlphaMode::Mask(0.5),
         perceptual_roughness: 0.92,
         // Blocks are matte.  Suppressing the default dielectric highlight
         // avoids broad plastic-looking glare on sun-facing terrain.
         reflectance: 0.18,
-        // The voxel mesher bakes Minecraft-style sky light, block light, and
-        // smooth corner occlusion into vertex colors.
+        // Keep the terrain on baked voxel lighting: the day/night tint can
+        // darken it smoothly without harsh PBR faces or shadow edges.
         unlit: true,
         ..default()
     })));
+}
+
+fn update_chunk_light_tint(
+    light_tint: Res<WorldLightTint>,
+    chunk_material: Option<Res<ChunkMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if !light_tint.is_changed() {
+        return;
+    }
+    let Some(mut material) = chunk_material
+        .as_deref()
+        .and_then(|chunk_material| materials.get_mut(&chunk_material.0))
+    else {
+        return;
+    };
+    material.base_color = Color::srgb(light_tint.0[0], light_tint.0[1], light_tint.0[2]);
 }

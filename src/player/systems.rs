@@ -57,7 +57,9 @@ pub(super) fn collect_movement_input(
         let sprint_pressed =
             keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
         controller.sprinting = sprint_pressed && hunger.is_none_or(|hunger| hunger.can_sprint());
-        controller.jump_requested = keyboard.just_pressed(KeyCode::Space);
+        // Keeping Space held queues another jump as soon as collision marks
+        // the player grounded, matching Minecraft's repeated jumping.
+        controller.jump_requested = jump_requested(&keyboard);
         controller.vertical_movement = if keyboard.pressed(KeyCode::Space) {
             1.0
         } else if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
@@ -154,7 +156,10 @@ pub(super) fn update_velocity(
         } else {
             settings.acceleration
         };
-        let next_horizontal = move_towards(horizontal, target, rate.abs() * delta_seconds);
+        let next_horizontal = clamp_horizontal_speed(
+            move_towards(horizontal, target, rate.abs() * delta_seconds),
+            horizontal_speed_limit(controller, &settings),
+        );
         velocity.0.x = next_horizontal.x;
         velocity.0.z = next_horizontal.z;
 
@@ -172,15 +177,31 @@ fn walking_target_velocity(
     look: &LookState,
     settings: &PlayerSettings,
 ) -> Vec3 {
-    let speed = if controller.sprinting {
+    let speed = horizontal_speed_limit(controller, settings);
+    let local_direction = Vec3::new(controller.movement.x, 0.0, -controller.movement.y);
+
+    Quat::from_rotation_y(look.yaw) * local_direction * speed
+}
+
+fn horizontal_speed_limit(controller: &PlayerController, settings: &PlayerSettings) -> f32 {
+    if controller.sprinting && controller.jump_requested && controller.movement != Vec2::ZERO {
+        settings.bunny_hop_speed.max(settings.sprint_speed)
+    } else if controller.sprinting {
         settings.sprint_speed
     } else {
         settings.walk_speed
     }
-    .max(0.0);
-    let local_direction = Vec3::new(controller.movement.x, 0.0, -controller.movement.y);
+    .max(0.0)
+}
 
-    Quat::from_rotation_y(look.yaw) * local_direction * speed
+fn clamp_horizontal_speed(velocity: Vec3, limit: f32) -> Vec3 {
+    let limit = limit.max(0.0);
+    let speed = velocity.length();
+    if speed > limit && speed > 0.0 {
+        velocity * (limit / speed)
+    } else {
+        velocity
+    }
 }
 
 fn noclip_target_velocity(
@@ -233,6 +254,10 @@ fn key_axis(keyboard: &ButtonInput<KeyCode>, negative: KeyCode, positive: KeyCod
     positive - negative
 }
 
+fn jump_requested(keyboard: &ButtonInput<KeyCode>) -> bool {
+    keyboard.pressed(KeyCode::Space)
+}
+
 fn set_cursor_captured(cursor: &mut CursorOptions, captured: bool) {
     let next_mode = if captured {
         CursorGrabMode::Locked
@@ -273,6 +298,19 @@ mod tests {
         };
 
         assert_eq!(jump_velocity(&settings), 9.5);
+    }
+
+    #[test]
+    fn held_space_keeps_requesting_jumps_after_the_initial_press() {
+        let mut keyboard = ButtonInput::default();
+        keyboard.press(KeyCode::Space);
+        keyboard.clear_just_pressed(KeyCode::Space);
+
+        assert!(!keyboard.just_pressed(KeyCode::Space));
+        assert!(jump_requested(&keyboard));
+
+        keyboard.release(KeyCode::Space);
+        assert!(!jump_requested(&keyboard));
     }
 
     #[test]
@@ -327,6 +365,28 @@ mod tests {
         let target = walking_target_velocity(&controller, &look, &settings);
 
         assert_vec3_close(target, Vec3::new(-settings.sprint_speed, 0.0, 0.0));
+    }
+
+    #[test]
+    fn sprint_bunny_hop_has_a_fun_but_bounded_speed() {
+        let settings = PlayerSettings::default();
+        let controller = PlayerController {
+            movement: Vec2::Y,
+            sprinting: true,
+            jump_requested: true,
+            ..Default::default()
+        };
+
+        let target = walking_target_velocity(&controller, &LookState::default(), &settings);
+        let excessive = target.normalize_or_zero() * 100.0;
+
+        assert_eq!(target.length(), settings.bunny_hop_speed);
+        assert!(settings.bunny_hop_speed > settings.sprint_speed);
+        assert!(settings.bunny_hop_speed < settings.sprint_speed * 1.5);
+        assert_vec3_close(
+            clamp_horizontal_speed(excessive, settings.bunny_hop_speed),
+            target,
+        );
     }
 
     #[test]

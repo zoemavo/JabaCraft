@@ -61,6 +61,8 @@ pub struct PlayerSettings {
     pub walk_speed: f32,
     /// Horizontal sprinting speed in world units per second.
     pub sprint_speed: f32,
+    /// Maximum horizontal speed while sprint-bunny-hopping.
+    pub bunny_hop_speed: f32,
     /// Noclip flight speed in world units per second.
     pub noclip_speed: f32,
     /// Maximum horizontal acceleration while movement input is held.
@@ -88,6 +90,7 @@ impl Default for PlayerSettings {
         Self {
             walk_speed: 4.317,
             sprint_speed: 5.612,
+            bunny_hop_speed: 7.25,
             noclip_speed: 10.0,
             acceleration: 28.0,
             deceleration: 34.0,

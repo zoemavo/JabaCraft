@@ -2,6 +2,7 @@
 /target/
 /dist/
 /installer/.staging/
+/saves/
 
 # IDE and editor settings
 .idea/

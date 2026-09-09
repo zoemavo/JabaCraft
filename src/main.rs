@@ -3,6 +3,7 @@ use rustcraft::{
     app::{APP_TITLE, AppPlugin},
     crafting::CraftingPlugin,
     game::GamePlugin,
+    game_time::GameTimePlugin,
     interaction::InteractionPlugin,
     inventory::InventoryPlugin,
     item::ItemPlugin,
@@ -33,6 +34,7 @@ fn main() {
         .add_plugins((
             AppPlugin,
             GamePlugin,
+            GameTimePlugin,
             PlayerPlugin,
             WorldPlugin,
             ScenePlugin,

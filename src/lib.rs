@@ -6,6 +6,7 @@ pub mod chunk;
 pub mod coordinates;
 pub mod crafting;
 pub mod game;
+pub mod game_time;
 pub mod generation;
 pub mod interaction;
 pub mod inventory;

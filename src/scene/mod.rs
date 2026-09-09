@@ -5,10 +5,13 @@ mod environment;
 use bevy::{core_pipeline::tonemapping::Tonemapping, prelude::*};
 
 pub(crate) use environment::SKY_COLOR;
-use environment::{distance_fog, skybox, spawn_environment};
+pub(crate) use environment::{EnvironmentUpdateSet, WorldLightTint};
+use environment::{distance_fog, install_environment, skybox, spawn_environment};
 
 use crate::{
+    game_time::GameTime,
     generation::{GenerationSettings, terrain_height_at},
+    persistence::PersistenceLoadSet,
     player::{
         Grounded, LookState, Noclip, Player, PlayerCamera, PlayerCollider, PlayerController,
         PlayerSettings, Velocity,
@@ -21,7 +24,8 @@ pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_scene);
+        install_environment(app);
+        app.add_systems(Startup, setup_scene.after(PersistenceLoadSet));
     }
 }
 
@@ -29,14 +33,16 @@ fn setup_scene(
     mut commands: Commands,
     player_settings: Res<PlayerSettings>,
     generation_settings: Res<GenerationSettings>,
+    game_time: Res<GameTime>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let skybox_image = spawn_environment(&mut images);
+    let skybox_image = spawn_environment(&mut commands, &mut images, &game_time);
     spawn_player(
         &mut commands,
         &player_settings,
         generation_settings.seed,
         skybox_image,
+        &game_time,
     );
     info!("Playable voxel scene initialized");
 }
@@ -46,6 +52,7 @@ fn spawn_player(
     settings: &PlayerSettings,
     terrain_seed: u64,
     skybox_image: Handle<Image>,
+    game_time: &GameTime,
 ) {
     let collider = PlayerCollider::from_dimensions(settings.player_width, settings.player_height);
     let spawn_x = 8.0;
@@ -84,8 +91,8 @@ fn spawn_player(
                 // Keep bright voxel colors from clipping while preserving
                 // detail in the darker propagated-light levels.
                 Tonemapping::AcesFitted,
-                skybox(skybox_image),
-                distance_fog(),
+                skybox(skybox_image, game_time),
+                distance_fog(game_time),
                 Projection::from(PerspectiveProjection {
                     fov: 60.0_f32.to_radians(),
                     ..default()
