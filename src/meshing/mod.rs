@@ -65,13 +65,13 @@ fn create_chunk_material(
         base_color: Color::srgb(light_tint.0[0], light_tint.0[1], light_tint.0[2]),
         base_color_texture: Some(atlas),
         alpha_mode: AlphaMode::Mask(0.5),
-        perceptual_roughness: 0.92,
+        perceptual_roughness: 1.0,
         // Blocks are matte.  Suppressing the default dielectric highlight
         // avoids broad plastic-looking glare on sun-facing terrain.
-        reflectance: 0.18,
-        // Keep the terrain on baked voxel lighting: the day/night tint can
-        // darken it smoothly without harsh PBR faces or shadow edges.
-        unlit: true,
+        reflectance: 0.0,
+        // Preserve baked voxel occlusion while allowing the low-contrast sun,
+        // ambient fill, and filtered cast shadows to reach the terrain.
+        unlit: false,
         ..default()
     })));
 }

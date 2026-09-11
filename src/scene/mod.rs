@@ -2,7 +2,7 @@
 
 mod environment;
 
-use bevy::{core_pipeline::tonemapping::Tonemapping, prelude::*};
+use bevy::{core_pipeline::tonemapping::Tonemapping, light::ShadowFilteringMethod, prelude::*};
 
 pub(crate) use environment::SKY_COLOR;
 pub(crate) use environment::{EnvironmentUpdateSet, WorldLightTint};
@@ -91,6 +91,7 @@ fn spawn_player(
                 // Keep bright voxel colors from clipping while preserving
                 // detail in the darker propagated-light levels.
                 Tonemapping::AcesFitted,
+                ShadowFilteringMethod::Gaussian,
                 skybox(skybox_image, game_time),
                 distance_fog(game_time),
                 Projection::from(PerspectiveProjection {

@@ -3,7 +3,7 @@
 use bevy::{
     asset::RenderAssetUsages,
     image::ImageSampler,
-    light::Skybox,
+    light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, Skybox},
     prelude::*,
     render::render_resource::{
         Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
@@ -14,8 +14,8 @@ use crate::game_time::{DAYLIGHT_FRACTION, GameTime, GameTimeUpdateSet};
 
 pub(crate) const SKY_COLOR: Color = Color::srgb(0.48, 0.69, 0.90);
 
-const FOG_START: f32 = 58.0;
-const FOG_END: f32 = 138.0;
+const FOG_START: f32 = 48.0;
+const FOG_END: f32 = 128.0;
 const SKYBOX_FACE_SIZE: u32 = 64;
 const SKY_UPDATE_STEP: f32 = 1.0 / 720.0;
 
@@ -25,7 +25,7 @@ pub(super) struct Sun;
 #[derive(Resource)]
 struct EnvironmentSky(Handle<Image>);
 
-/// Multiplies the baked voxel lighting without introducing hard shadow edges.
+/// A subtle palette tint, independent of the sun and ambient light intensity.
 #[derive(Clone, Copy, Debug, Resource)]
 pub(crate) struct WorldLightTint(pub [f32; 3]);
 
@@ -39,6 +39,7 @@ pub(super) fn install_environment(app: &mut App) {
         brightness: lighting.ambient_brightness,
         affects_lightmapped_meshes: true,
     })
+    .insert_resource(DirectionalLightShadowMap { size: 1024 })
     .insert_resource(WorldLightTint(lighting.world_tint))
     .add_systems(
         Update,
@@ -62,11 +63,19 @@ pub(super) fn spawn_environment(
         DirectionalLight {
             color: color(lighting.sun_color),
             illuminance: lighting.sun_illuminance,
-            // The prior cascade shadows were deliberately removed: baked
-            // voxel occlusion is softer and substantially cheaper.
-            shadow_maps_enabled: false,
+            // Ambient fill keeps these filtered shadows low contrast. Limit
+            // their range to avoid rendering the entire streamed world twice.
+            shadow_maps_enabled: true,
             ..default()
         },
+        CascadeShadowConfigBuilder {
+            num_cascades: 2,
+            first_cascade_far_bound: 20.0,
+            maximum_distance: 80.0,
+            overlap_proportion: 0.2,
+            ..default()
+        }
+        .build(),
         sun_transform(lighting.sun_direction),
     ));
     image
@@ -89,7 +98,7 @@ pub(super) fn distance_fog(game_time: &GameTime) -> DistanceFog {
             lighting.sun_color[0],
             lighting.sun_color[1],
             lighting.sun_color[2],
-            lighting.daylight * 0.28,
+            lighting.daylight * 0.06,
         ),
         directional_light_exponent: 24.0,
         // A cheap linear fade preserves crisp nearby voxels and blends the
@@ -132,7 +141,7 @@ fn update_environment(
             lighting.sun_color[0],
             lighting.sun_color[1],
             lighting.sun_color[2],
-            lighting.daylight * 0.28,
+            lighting.daylight * 0.06,
         );
     }
 
@@ -151,7 +160,8 @@ fn update_environment(
     }
 }
 
-/// Generates a tiny cubemap once at startup. Its color follows the vertical
+/// Generates a tiny cubemap at startup and refreshes it at discrete clock steps.
+/// Its color follows the vertical
 /// direction, producing a clean blue zenith and a pale horizon without a
 /// texture asset, compute shaders, ray marching, or per-frame updates.
 fn create_stylized_skybox(lighting: LightingState) -> Image {
@@ -222,7 +232,7 @@ fn sky_pixel(direction: Vec3, lighting: LightingState) -> [u8; 4] {
     };
     let mut rgb = mix3(from, to, t);
     let sun_dot = direction.dot(lighting.sun_direction);
-    let sun_glow = smoothstep(0.94, 0.995, sun_dot) * lighting.daylight * 0.28;
+    let sun_glow = smoothstep(0.94, 0.995, sun_dot) * lighting.daylight * 0.10;
     let sun_disc = smoothstep(0.995, 0.9985, sun_dot) * lighting.daylight;
     rgb = mix3(rgb, [1.0, 0.78, 0.40], sun_glow);
     rgb = mix3(rgb, [1.0, 0.94, 0.72], sun_disc);
@@ -264,8 +274,8 @@ fn lighting_at(day_fraction: f32) -> LightingState {
     };
     const SUNSET_SKY: SkyPalette = SkyPalette {
         zenith: [0.12, 0.12, 0.32],
-        horizon: [0.96, 0.36, 0.18],
-        below_horizon: [0.28, 0.12, 0.20],
+        horizon: [0.76, 0.53, 0.43],
+        below_horizon: [0.36, 0.30, 0.36],
     };
     const NIGHT_SKY: SkyPalette = SkyPalette {
         zenith: [0.025, 0.045, 0.120],
@@ -300,13 +310,17 @@ fn lighting_at(day_fraction: f32) -> LightingState {
         daylight,
         sun_direction,
         sun_color,
-        sun_illuminance: 4_500.0 * daylight.powf(1.4),
-        ambient_color: mix3([0.24, 0.32, 0.58], [0.58, 0.70, 0.88], daylight),
-        ambient_brightness: lerp(120.0, 650.0, daylight),
+        // A modest key light over broad ambient fill gives readable voxel
+        // shapes without inky shadows or glaring sun-facing surfaces.
+        sun_illuminance: 1_200.0 * smoothstep(0.0, 0.35, sun_height),
+        ambient_color: mix3([0.48, 0.56, 0.72], [0.82, 0.87, 0.95], daylight),
+        ambient_brightness: lerp(260.0, 2_400.0, daylight),
         sky,
         sky_brightness: lerp(220.0, 900.0, daylight),
-        fog_color: mix3([0.070, 0.095, 0.190], [0.52, 0.69, 0.86], daylight),
-        world_tint: mix3([0.48, 0.56, 0.76], [1.0, 1.0, 1.0], daylight),
+        fog_color: sky.horizon,
+        // Intensity already follows the clock through the actual lights;
+        // avoid multiplying a second night-time blackout into the material.
+        world_tint: mix3([0.88, 0.92, 1.0], [1.0, 1.0, 1.0], daylight),
     }
 }
 
@@ -402,5 +416,17 @@ mod tests {
         assert!((before.sky_brightness - after.sky_brightness).abs() < 25.0);
         assert!((before.world_tint[2] - after.world_tint[2]).abs() < 0.02);
         assert!((before.fog_color[0] - after.fog_color[0]).abs() < 0.02);
+    }
+
+    #[test]
+    fn fog_matches_the_sky_horizon_throughout_the_cycle() {
+        for step in 0..=96 {
+            let lighting = lighting_at(step as f32 / 96.0);
+            assert_eq!(lighting.fog_color, lighting.sky.horizon);
+            assert!(lighting.sun_illuminance.is_finite());
+            if lighting.sun_direction.y <= 0.0 {
+                assert_eq!(lighting.sun_illuminance, 0.0);
+            }
+        }
     }
 }

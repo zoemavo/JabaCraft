@@ -274,7 +274,9 @@ fn spread_to(
 }
 
 fn light_rgb(levels: LightLevels) -> [f32; 3] {
-    let sky = light_curve(levels.sky);
+    // Lift partial skylight under foliage now that real cast shadows provide
+    // additional occlusion. Zero skylight still leaves enclosed caves dark.
+    let sky = light_curve(levels.sky).sqrt();
     let block = light_curve(levels.block);
     [
         (0.035 + sky * 0.965 + block).min(1.0),
@@ -319,9 +321,11 @@ fn face_normal(face: BlockFace) -> [i32; 3] {
 fn face_shade(face: BlockFace) -> f32 {
     match face {
         BlockFace::Top => 1.0,
-        BlockFace::Bottom => 0.50,
-        BlockFace::North | BlockFace::South => 0.80,
-        BlockFace::East | BlockFace::West => 0.65,
+        // The sun now provides directional shading; retain only a subtle
+        // voxel face cue instead of applying the old unlit contrast twice.
+        BlockFace::Bottom => 0.80,
+        BlockFace::North | BlockFace::South => 0.94,
+        BlockFace::East | BlockFace::West => 0.88,
     }
 }
 
