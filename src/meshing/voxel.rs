@@ -4,7 +4,7 @@ use bevy::{
 };
 
 use crate::{
-    block::{BlockFace, BlockRegistry, TextureIndex},
+    block::{BlockFace, BlockId, BlockRegistry, TextureIndex},
     chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, ChunkStorage},
     coordinates::{ChunkPos, LocalBlockPos, WorldBlockPos},
 };
@@ -19,8 +19,24 @@ pub(super) fn build_chunk_mesh(
     storage: &ChunkStorage,
     registry: &BlockRegistry,
     terrain_seed: u64,
-) -> Mesh {
-    build_chunk_mesh_buffers_with_seed(chunk_position, storage, registry, terrain_seed).into_mesh()
+) -> ChunkMeshes {
+    let buffers =
+        build_chunk_mesh_buffers_with_seed(chunk_position, storage, registry, terrain_seed);
+    ChunkMeshes {
+        opaque: buffers.opaque.into_mesh(),
+        water: buffers.water.into_mesh(),
+    }
+}
+
+pub(super) struct ChunkMeshes {
+    pub opaque: Mesh,
+    pub water: Mesh,
+}
+
+#[derive(Default)]
+struct SplitBuffers {
+    opaque: ChunkMeshBuffers,
+    water: ChunkMeshBuffers,
 }
 
 #[cfg(test)]
@@ -29,7 +45,7 @@ fn build_chunk_mesh_buffers(
     storage: &ChunkStorage,
     registry: &BlockRegistry,
 ) -> ChunkMeshBuffers {
-    build_chunk_mesh_buffers_with_seed(chunk_position, storage, registry, 0)
+    build_chunk_mesh_buffers_with_seed(chunk_position, storage, registry, 0).opaque
 }
 
 fn build_chunk_mesh_buffers_with_seed(
@@ -37,14 +53,14 @@ fn build_chunk_mesh_buffers_with_seed(
     storage: &ChunkStorage,
     registry: &BlockRegistry,
     terrain_seed: u64,
-) -> ChunkMeshBuffers {
+) -> SplitBuffers {
     let Some(chunk) = storage.get_chunk(chunk_position) else {
-        return ChunkMeshBuffers::default();
+        return SplitBuffers::default();
     };
     if chunk.is_all_air() {
-        return ChunkMeshBuffers::default();
+        return SplitBuffers::default();
     }
-    let mut buffers = ChunkMeshBuffers::default();
+    let mut buffers = SplitBuffers::default();
     let mut lights = None;
 
     for y in 0..CHUNK_HEIGHT {
@@ -52,7 +68,7 @@ fn build_chunk_mesh_buffers_with_seed(
             for x in 0..CHUNK_WIDTH {
                 let local = LocalBlockPos::new(x, y, z).expect("loop stays inside chunk bounds");
                 let block = chunk.get_local(local);
-                if !registry.is_solid(block) {
+                if block == BlockId::AIR {
                     continue;
                 }
 
@@ -63,7 +79,12 @@ fn build_chunk_mesh_buffers_with_seed(
                         let lights = lights.get_or_insert_with(|| {
                             ChunkLightMap::build(chunk_position, storage, registry, terrain_seed)
                         });
-                        buffers.push_face(
+                        let target = if block == BlockId::WATER {
+                            &mut buffers.water
+                        } else {
+                            &mut buffers.opaque
+                        };
+                        target.push_face(
                             [x as f32, y as f32, z as f32],
                             world,
                             face,
@@ -95,9 +116,11 @@ fn is_face_visible(
         block_position.z + face.neighbor[2],
     );
 
-    storage
-        .get_block(neighbor)
-        .is_none_or(|block| registry.is_transparent(block))
+    let current = storage.get_block(block_position);
+    storage.get_block(neighbor).is_none_or(|block| {
+        registry.is_transparent(block)
+            && !(current == Some(BlockId::WATER) && block == BlockId::WATER)
+    })
 }
 
 #[derive(Default)]
@@ -258,6 +281,78 @@ mod tests {
         let mut storage = ChunkStorage::default();
         storage.insert_chunk(position, Chunk::default());
         storage
+    }
+
+    #[test]
+    fn water_is_separate_and_hides_internal_faces_on_every_axis() {
+        let position = ChunkPos::new(0, 0, 0);
+        for offset in [[1, 0, 0], [0, 1, 0], [0, 0, 1]] {
+            let mut storage = storage_with_chunk(position);
+            storage
+                .set_block(WorldBlockPos::new(2, 2, 2), BlockId::WATER)
+                .unwrap();
+            storage
+                .set_block(
+                    WorldBlockPos::new(2 + offset[0], 2 + offset[1], 2 + offset[2]),
+                    BlockId::WATER,
+                )
+                .unwrap();
+            let buffers = build_chunk_mesh_buffers_with_seed(
+                position,
+                &storage,
+                &BlockRegistry::default(),
+                0,
+            );
+            assert_eq!(buffers.opaque.positions.len(), 0);
+            assert_eq!(buffers.water.positions.len(), 10 * 4);
+            assert_eq!(buffers.water.indices.len(), 10 * 6);
+        }
+    }
+
+    #[test]
+    fn water_culls_across_negative_and_vertical_chunk_boundaries() {
+        for (a, b) in [
+            (WorldBlockPos::new(-1, 2, 2), WorldBlockPos::new(0, 2, 2)),
+            (WorldBlockPos::new(2, -1, 2), WorldBlockPos::new(2, 0, 2)),
+            (WorldBlockPos::new(2, 2, -1), WorldBlockPos::new(2, 2, 0)),
+        ] {
+            let mut storage = storage_with_chunk(a.split().0);
+            storage.set_block(a, BlockId::WATER).unwrap();
+            let exposed = build_chunk_mesh_buffers_with_seed(
+                a.split().0,
+                &storage,
+                &BlockRegistry::default(),
+                0,
+            );
+            assert_eq!(exposed.water.positions.len(), 6 * 4);
+            storage.insert_chunk(b.split().0, Chunk::default());
+            storage.set_block(b, BlockId::WATER).unwrap();
+            for position in [a.split().0, b.split().0] {
+                let buffers = build_chunk_mesh_buffers_with_seed(
+                    position,
+                    &storage,
+                    &BlockRegistry::default(),
+                    0,
+                );
+                assert_eq!(buffers.water.positions.len(), 5 * 4);
+            }
+        }
+    }
+
+    #[test]
+    fn solid_shore_face_remains_visible_through_water() {
+        let position = ChunkPos::new(0, 0, 0);
+        let mut storage = storage_with_chunk(position);
+        storage
+            .set_block(WorldBlockPos::new(2, 2, 2), BlockId::STONE)
+            .unwrap();
+        storage
+            .set_block(WorldBlockPos::new(3, 2, 2), BlockId::WATER)
+            .unwrap();
+        let buffers =
+            build_chunk_mesh_buffers_with_seed(position, &storage, &BlockRegistry::default(), 0);
+        assert_eq!(buffers.opaque.positions.len(), 6 * 4);
+        assert_eq!(buffers.water.positions.len(), 5 * 4);
     }
 
     #[test]

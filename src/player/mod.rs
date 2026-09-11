@@ -3,21 +3,25 @@
 mod collision;
 mod components;
 mod systems;
+mod water;
 
 use crate::inventory::InventoryInputSet;
 use bevy::prelude::*;
 
 pub use components::{
     Grounded, LookState, Noclip, Player, PlayerCamera, PlayerCollider, PlayerController,
-    PlayerSettings, Velocity,
+    PlayerInWater, PlayerSettings, Velocity,
 };
+pub(crate) use water::point_is_underwater;
 
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, SystemSet)]
 pub enum PlayerPhysicsSet {
     Cursor,
     ReadInput,
+    DetectWater,
     UpdateVelocity,
     ResolveCollisions,
+    RefreshWater,
     SyncView,
 }
 
@@ -37,8 +41,10 @@ impl Plugin for PlayerPlugin {
             .configure_sets(
                 FixedUpdate,
                 (
+                    PlayerPhysicsSet::DetectWater,
                     PlayerPhysicsSet::UpdateVelocity,
                     PlayerPhysicsSet::ResolveCollisions,
+                    PlayerPhysicsSet::RefreshWater,
                 )
                     .chain(),
             )
@@ -57,6 +63,14 @@ impl Plugin for PlayerPlugin {
                     systems::toggle_noclip,
                 )
                     .in_set(PlayerPhysicsSet::ReadInput),
+            )
+            .add_systems(
+                FixedUpdate,
+                water::update_player_water.in_set(PlayerPhysicsSet::DetectWater),
+            )
+            .add_systems(
+                FixedUpdate,
+                water::update_player_water.in_set(PlayerPhysicsSet::RefreshWater),
             )
             .add_systems(
                 FixedUpdate,

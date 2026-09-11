@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use bevy::prelude::*;
+use bevy::{light::NotShadowCaster, prelude::*};
 
 use crate::{
     block::BlockRegistry,
@@ -9,18 +9,27 @@ use crate::{
     generation::{ChunkGenerationQueue, ChunkLifecycle, GenerationSettings},
 };
 
-use super::{ChunkMaterial, MeshingSettings, voxel::build_chunk_mesh};
+use super::{
+    ChunkMaterial, MeshingSettings,
+    voxel::{ChunkMeshes, build_chunk_mesh},
+};
 
-/// Identifies the render entity belonging to one chunk.
+/// Identifies either render layer belonging to one chunk.
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ChunkMesh {
     pub position: ChunkPos,
 }
 
-#[derive(Debug)]
-struct RenderedChunk {
+#[derive(Debug, Default)]
+struct RenderedPart {
     entity: Option<Entity>,
     mesh: Option<Handle<Mesh>>,
+}
+
+#[derive(Debug)]
+struct RenderedChunk {
+    opaque: RenderedPart,
+    water: RenderedPart,
     revision: u64,
 }
 
@@ -33,14 +42,29 @@ pub struct ChunkRenderer {
 }
 
 impl ChunkRenderer {
+    /// Opaque/cutout layer (water uses a separate entity).
     pub fn entity(&self, position: ChunkPos) -> Option<Entity> {
-        self.rendered.get(&position).and_then(|chunk| chunk.entity)
+        self.rendered
+            .get(&position)
+            .and_then(|chunk| chunk.opaque.entity)
     }
 
     pub fn mesh(&self, position: ChunkPos) -> Option<&Handle<Mesh>> {
         self.rendered
             .get(&position)
-            .and_then(|chunk| chunk.mesh.as_ref())
+            .and_then(|chunk| chunk.opaque.mesh.as_ref())
+    }
+
+    pub fn water_entity(&self, position: ChunkPos) -> Option<Entity> {
+        self.rendered
+            .get(&position)
+            .and_then(|chunk| chunk.water.entity)
+    }
+
+    pub fn water_mesh(&self, position: ChunkPos) -> Option<&Handle<Mesh>> {
+        self.rendered
+            .get(&position)
+            .and_then(|chunk| chunk.water.mesh.as_ref())
     }
 
     pub fn revision(&self, position: ChunkPos) -> Option<u64> {
@@ -104,8 +128,8 @@ pub(super) fn sync_chunk_renderer(
             rendered.revision = rendered.revision.saturating_add(1);
         } else {
             let mut rendered = RenderedChunk {
-                entity: None,
-                mesh: None,
+                opaque: RenderedPart::default(),
+                water: RenderedPart::default(),
                 revision: 1,
             };
             apply_rebuilt_mesh(
@@ -133,10 +157,40 @@ fn apply_rebuilt_mesh(
     meshes: &mut Assets<Mesh>,
     position: ChunkPos,
     rendered: &mut RenderedChunk,
+    rebuilt_mesh: ChunkMeshes,
+) {
+    apply_part(
+        commands,
+        &material.0,
+        meshes,
+        position,
+        &mut rendered.opaque,
+        rebuilt_mesh.opaque,
+        false,
+    );
+    apply_part(
+        commands,
+        &material.1,
+        meshes,
+        position,
+        &mut rendered.water,
+        rebuilt_mesh.water,
+        true,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_part(
+    commands: &mut Commands,
+    material: &Handle<StandardMaterial>,
+    meshes: &mut Assets<Mesh>,
+    position: ChunkPos,
+    rendered: &mut RenderedPart,
     rebuilt_mesh: Mesh,
+    water: bool,
 ) {
     if rebuilt_mesh.count_vertices() == 0 {
-        release_render_objects(commands, meshes, rendered);
+        release_part(commands, meshes, rendered);
         return;
     }
 
@@ -151,17 +205,20 @@ fn apply_rebuilt_mesh(
         return;
     }
 
-    release_render_objects(commands, meshes, rendered);
+    release_part(commands, meshes, rendered);
     let mesh = meshes.add(rebuilt_mesh);
     let entity = commands
         .spawn((
             Name::new(format!(
-                "Voxel Chunk ({}, {}, {})",
-                position.x, position.y, position.z
+                "Voxel {} Chunk ({}, {}, {})",
+                if water { "Water" } else { "Opaque" },
+                position.x,
+                position.y,
+                position.z
             )),
             ChunkMesh { position },
             Mesh3d(mesh.clone()),
-            MeshMaterial3d(material.0.clone()),
+            MeshMaterial3d(material.clone()),
             Transform::from_xyz(
                 (position.x * CHUNK_WIDTH as i32) as f32,
                 (position.y * CHUNK_HEIGHT as i32) as f32,
@@ -169,8 +226,20 @@ fn apply_rebuilt_mesh(
             ),
         ))
         .id();
+    if water {
+        commands.entity(entity).insert(NotShadowCaster);
+    }
     rendered.entity = Some(entity);
     rendered.mesh = Some(mesh);
+}
+
+fn release_part(commands: &mut Commands, meshes: &mut Assets<Mesh>, rendered: &mut RenderedPart) {
+    if let Some(entity) = rendered.entity.take() {
+        commands.entity(entity).despawn();
+    }
+    if let Some(mesh) = rendered.mesh.take() {
+        meshes.remove(mesh.id());
+    }
 }
 
 fn release_render_objects(
@@ -178,12 +247,8 @@ fn release_render_objects(
     meshes: &mut Assets<Mesh>,
     rendered: &mut RenderedChunk,
 ) {
-    if let Some(entity) = rendered.entity.take() {
-        commands.entity(entity).despawn();
-    }
-    if let Some(mesh) = rendered.mesh.take() {
-        meshes.remove(mesh.id());
-    }
+    release_part(commands, meshes, &mut rendered.opaque);
+    release_part(commands, meshes, &mut rendered.water);
 }
 
 fn despawn_unloaded_chunks(
@@ -227,7 +292,7 @@ mod tests {
             .insert_resource(MeshingSettings {
                 rebuild_budget_per_frame: usize::MAX,
             })
-            .insert_resource(ChunkMaterial(Handle::default()))
+            .insert_resource(ChunkMaterial(Handle::default(), Handle::default()))
             .add_systems(Update, sync_chunk_renderer);
         app
     }
@@ -239,6 +304,93 @@ mod tests {
         app.world_mut()
             .resource_mut::<ChunkGenerationQueue>()
             .register_generated(position);
+    }
+
+    #[test]
+    fn mixed_chunk_layers_reuse_assets_and_release_independently() {
+        let mut app = renderer_test_app();
+        let position = ChunkPos::new(0, 0, 0);
+        insert_chunk(&mut app, position, BlockId::AIR);
+        let stone = WorldBlockPos::new(2, 2, 2);
+        let water = WorldBlockPos::new(3, 2, 2);
+        {
+            let mut storage = app.world_mut().resource_mut::<ChunkStorage>();
+            storage.set_block(stone, BlockId::STONE).unwrap();
+            storage.set_block(water, BlockId::WATER).unwrap();
+        }
+        app.update();
+        let renderer = app.world().resource::<ChunkRenderer>();
+        let opaque_entity = renderer.entity(position).unwrap();
+        let water_entity = renderer.water_entity(position).unwrap();
+        let water_mesh = renderer.water_mesh(position).unwrap().id();
+        assert_ne!(opaque_entity, water_entity);
+        assert!(app.world().get::<NotShadowCaster>(water_entity).is_some());
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 2);
+
+        app.world_mut()
+            .resource_mut::<ChunkStorage>()
+            .set_block(stone, BlockId::AIR)
+            .unwrap();
+        app.update();
+        let renderer = app.world().resource::<ChunkRenderer>();
+        assert_eq!(renderer.entity(position), None);
+        assert_eq!(renderer.water_entity(position), Some(water_entity));
+        assert_eq!(renderer.water_mesh(position).unwrap().id(), water_mesh);
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 1);
+
+        app.world_mut()
+            .resource_mut::<ChunkStorage>()
+            .set_block(water, BlockId::AIR)
+            .unwrap();
+        app.update();
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
+        app.world_mut()
+            .resource_mut::<ChunkStorage>()
+            .set_block(water, BlockId::WATER)
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<ChunkStorage>()
+            .set_block(stone, BlockId::STONE)
+            .unwrap();
+        app.update();
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 2);
+        app.world_mut()
+            .resource_mut::<ChunkStorage>()
+            .remove_chunk(position);
+        app.update();
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
+        let world = app.world_mut();
+        assert_eq!(world.query::<&ChunkMesh>().iter(world).count(), 0);
+    }
+
+    #[test]
+    fn water_neighbor_loading_and_unloading_rebuilds_boundary_faces() {
+        let mut app = renderer_test_app();
+        let left = ChunkPos::new(0, 0, 0);
+        let right = ChunkPos::new(1, 0, 0);
+        insert_chunk(&mut app, left, BlockId::WATER);
+        app.update();
+        let count = |app: &App| {
+            let handle = app
+                .world()
+                .resource::<ChunkRenderer>()
+                .water_mesh(left)
+                .unwrap();
+            app.world()
+                .resource::<Assets<Mesh>>()
+                .get(handle)
+                .unwrap()
+                .count_vertices()
+        };
+        let exposed = count(&app);
+        insert_chunk(&mut app, right, BlockId::WATER);
+        app.update();
+        assert_eq!(exposed - count(&app), CHUNK_HEIGHT * CHUNK_DEPTH * 4);
+        app.world_mut()
+            .resource_mut::<ChunkStorage>()
+            .remove_chunk(right);
+        app.update();
+        assert_eq!(count(&app), exposed);
     }
 
     #[test]

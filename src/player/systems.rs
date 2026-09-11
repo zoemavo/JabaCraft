@@ -7,7 +7,8 @@ use bevy::{
 };
 
 use super::{
-    Grounded, LookState, Noclip, Player, PlayerCamera, PlayerController, PlayerSettings, Velocity,
+    Grounded, LookState, Noclip, Player, PlayerCamera, PlayerController, PlayerInWater,
+    PlayerSettings, Velocity,
 };
 use crate::{
     inventory::InventoryState,
@@ -129,6 +130,7 @@ pub(super) fn update_velocity(
             &PlayerController,
             &LookState,
             &Noclip,
+            &PlayerInWater,
             &mut Velocity,
             &mut Grounded,
         ),
@@ -136,7 +138,7 @@ pub(super) fn update_velocity(
     >,
 ) {
     let delta_seconds = time.delta_secs();
-    for (controller, look, noclip, mut velocity, mut grounded) in &mut players {
+    for (controller, look, noclip, water, mut velocity, mut grounded) in &mut players {
         if noclip.0 {
             let target = noclip_target_velocity(controller, look, &settings);
             let rate = if target == Vec3::ZERO {
@@ -146,6 +148,11 @@ pub(super) fn update_velocity(
             };
             velocity.0 = move_towards(velocity.0, target, rate.abs() * delta_seconds);
             grounded.0 = false;
+            continue;
+        }
+
+        if water.is_in_water() {
+            velocity.0 = swimming_velocity(velocity.0, controller, look, delta_seconds, &settings);
             continue;
         }
 
@@ -170,6 +177,36 @@ pub(super) fn update_velocity(
             velocity.0.y = velocity_after_gravity(velocity.0.y, delta_seconds, &settings);
         }
     }
+}
+
+fn swimming_velocity(
+    current: Vec3,
+    controller: &PlayerController,
+    look: &LookState,
+    delta_seconds: f32,
+    settings: &PlayerSettings,
+) -> Vec3 {
+    let dt = delta_seconds.max(0.0);
+    let speed = settings.swim_speed.max(0.0);
+    let direction = Vec3::new(controller.movement.x, 0.0, -controller.movement.y);
+    let target = Quat::from_rotation_y(look.yaw) * direction.normalize_or_zero() * speed;
+    let mut next = clamp_horizontal_speed(
+        move_towards(
+            Vec3::new(current.x, 0.0, current.z),
+            target,
+            settings.water_acceleration.abs() * dt,
+        ),
+        speed,
+    );
+    let rise = settings.swim_up_speed.abs();
+    let sink = settings.water_terminal_velocity.abs();
+    let vertical = current.y.clamp(-sink, rise);
+    next.y = if controller.jump_requested {
+        (vertical + settings.water_acceleration.abs() * dt).min(rise)
+    } else {
+        (vertical - settings.water_gravity.abs() * dt).max(-sink)
+    };
+    next
 }
 
 fn walking_target_velocity(
@@ -298,6 +335,58 @@ mod tests {
         };
 
         assert_eq!(jump_velocity(&settings), 9.5);
+    }
+
+    #[test]
+    fn swimming_slows_fast_entry_and_ignores_sprint_bunny_hop() {
+        let settings = PlayerSettings::default();
+        let controller = PlayerController {
+            movement: Vec2::Y,
+            sprinting: true,
+            jump_requested: true,
+            ..default()
+        };
+        let next = swimming_velocity(
+            Vec3::new(20.0, -50.0, 0.0),
+            &controller,
+            &LookState::default(),
+            1.0 / 64.0,
+            &settings,
+        );
+        assert!(Vec2::new(next.x, next.z).length() <= settings.swim_speed + 0.0001);
+        assert!(next.y >= -settings.water_terminal_velocity);
+        assert!(settings.water_gravity < settings.gravity);
+    }
+
+    #[test]
+    fn held_space_swims_up_without_ground_and_release_sinks_slowly() {
+        let settings = PlayerSettings::default();
+        let mut controller = PlayerController {
+            jump_requested: true,
+            ..default()
+        };
+        let mut velocity = Vec3::ZERO;
+        for _ in 0..128 {
+            velocity = swimming_velocity(
+                velocity,
+                &controller,
+                &LookState::default(),
+                1.0 / 64.0,
+                &settings,
+            );
+        }
+        assert_eq!(velocity.y, settings.swim_up_speed);
+        controller.jump_requested = false;
+        for _ in 0..256 {
+            velocity = swimming_velocity(
+                velocity,
+                &controller,
+                &LookState::default(),
+                1.0 / 64.0,
+                &settings,
+            );
+        }
+        assert_eq!(velocity.y, -settings.water_terminal_velocity);
     }
 
     #[test]

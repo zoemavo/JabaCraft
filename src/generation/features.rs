@@ -57,7 +57,8 @@ impl FeatureGenerator {
 
     fn tree_at(self, root_x: i64, root_z: i64) -> Option<TreeFeature> {
         let sample = self.sampler.sample(root_x, root_z);
-        if !matches!(sample.biome, Biome::Forest | Biome::Plains)
+        if sample.terrain_height < super::terrain::SEA_LEVEL
+            || !matches!(sample.biome, Biome::Forest | Biome::Plains)
             || sample.biome.definition().surface_block != BlockId::GRASS
             || !passes_density_roll(self.seed, root_x, root_z, sample.tree_density)
             || !self.has_suitable_ground(root_x, root_z, sample.terrain_height)

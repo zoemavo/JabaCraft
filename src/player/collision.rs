@@ -279,6 +279,25 @@ mod tests {
     }
 
     #[test]
+    fn water_allows_horizontal_and_vertical_motion() {
+        let mut storage = ChunkStorage::default();
+        storage.insert_chunk(ChunkPos::new(0, 0, 0), Chunk::new(BlockId::WATER));
+        let mut velocity = Vec3::new(2.0, -2.0, 1.0);
+        let result = move_aabb(
+            Vec3::new(4.5, 8.0, 4.5),
+            PLAYER_HALF_EXTENTS,
+            &mut velocity,
+            0.5,
+            &storage,
+            &BlockRegistry::default(),
+        );
+        assert!((result.position - Vec3::new(5.5, 7.0, 5.0)).length() < 0.0001);
+        assert_eq!(velocity, Vec3::new(2.0, -2.0, 1.0));
+        assert!(!result.grounded);
+        assert!(!result.waiting_for_world);
+    }
+
+    #[test]
     fn standing_player_detects_support_without_scanning_the_chunk() {
         let mut storage = storage_with_origin_chunk();
         put(&mut storage, 0, 0, 0);

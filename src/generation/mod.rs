@@ -17,7 +17,7 @@ use streaming::{ChunkGenerationTasks, stream_chunks_around_player};
 pub use biome::{Biome, BiomeDefinition, BiomeSample, BiomeSampler};
 pub use cave::CaveSettings;
 pub use queue::{ChunkGenerationQueue, ChunkLifecycle};
-pub use terrain::{is_chunk_potentially_empty, terrain_height_at};
+pub use terrain::{SEA_LEVEL, is_chunk_potentially_empty, terrain_height_at};
 
 pub const DEFAULT_WORLD_MIN_Y: i32 = -64;
 pub const DEFAULT_WORLD_MAX_Y: i32 = 192;

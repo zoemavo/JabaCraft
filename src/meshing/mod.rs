@@ -34,7 +34,7 @@ impl Default for MeshingSettings {
 }
 
 #[derive(Resource)]
-struct ChunkMaterial(Handle<StandardMaterial>);
+struct ChunkMaterial(Handle<StandardMaterial>, Handle<StandardMaterial>);
 
 /// Owns discovery, creation, rebuilding, and removal of rendered chunks.
 pub struct ChunkMeshingPlugin;
@@ -61,19 +61,31 @@ fn create_chunk_material(
     light_tint: Res<WorldLightTint>,
 ) {
     let atlas = images.add(create_block_texture_atlas());
-    commands.insert_resource(ChunkMaterial(materials.add(StandardMaterial {
-        base_color: Color::srgb(light_tint.0[0], light_tint.0[1], light_tint.0[2]),
-        base_color_texture: Some(atlas),
-        alpha_mode: AlphaMode::Mask(0.5),
+    let water = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.32, 0.58, 0.72, 0.55),
+        alpha_mode: AlphaMode::Blend,
         perceptual_roughness: 1.0,
-        // Blocks are matte.  Suppressing the default dielectric highlight
-        // avoids broad plastic-looking glare on sun-facing terrain.
         reflectance: 0.0,
-        // Preserve baked voxel occlusion while allowing the low-contrast sun,
-        // ambient fill, and filtered cast shadows to reach the terrain.
-        unlit: false,
+        double_sided: true,
+        cull_mode: None,
         ..default()
-    })));
+    });
+    commands.insert_resource(ChunkMaterial(
+        materials.add(StandardMaterial {
+            base_color: Color::srgb(light_tint.0[0], light_tint.0[1], light_tint.0[2]),
+            base_color_texture: Some(atlas),
+            alpha_mode: AlphaMode::Mask(0.5),
+            perceptual_roughness: 1.0,
+            // Blocks are matte.  Suppressing the default dielectric highlight
+            // avoids broad plastic-looking glare on sun-facing terrain.
+            reflectance: 0.0,
+            // Preserve baked voxel occlusion while allowing the low-contrast sun,
+            // ambient fill, and filtered cast shadows to reach the terrain.
+            unlit: false,
+            ..default()
+        }),
+        water,
+    ));
 }
 
 fn update_chunk_light_tint(
@@ -91,4 +103,31 @@ fn update_chunk_light_tint(
         return;
     };
     material.base_color = Color::srgb(light_tint.0[0], light_tint.0[1], light_tint.0[2]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn water_has_its_own_blended_double_sided_material() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .insert_resource(WorldLightTint([1.0; 3]))
+            .add_systems(Startup, create_chunk_material);
+        app.update();
+        let handles = app.world().resource::<ChunkMaterial>();
+        assert_ne!(handles.0.id(), handles.1.id());
+        let materials = app.world().resource::<Assets<StandardMaterial>>();
+        assert!(matches!(
+            materials.get(&handles.0).unwrap().alpha_mode,
+            AlphaMode::Mask(_)
+        ));
+        let water = materials.get(&handles.1).unwrap();
+        assert_eq!(water.alpha_mode, AlphaMode::Blend);
+        assert!(water.base_color.alpha() > 0.0 && water.base_color.alpha() < 1.0);
+        assert!(water.double_sided);
+        assert_eq!(water.cull_mode, None);
+    }
 }

@@ -1,8 +1,12 @@
 //! Bootstrap entities shared by the playable 3D scene.
 
 mod environment;
+mod underwater;
 
-use bevy::{core_pipeline::tonemapping::Tonemapping, light::ShadowFilteringMethod, prelude::*};
+use bevy::{
+    core_pipeline::tonemapping::Tonemapping, light::ShadowFilteringMethod, prelude::*,
+    render::view::ColorGrading, transform::TransformSystems,
+};
 
 pub(crate) use environment::SKY_COLOR;
 pub(crate) use environment::{EnvironmentUpdateSet, WorldLightTint};
@@ -25,7 +29,11 @@ pub struct ScenePlugin;
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         install_environment(app);
-        app.add_systems(Startup, setup_scene.after(PersistenceLoadSet));
+        app.add_systems(Startup, setup_scene.after(PersistenceLoadSet))
+            .add_systems(
+                PostUpdate,
+                underwater::update_underwater_view.after(TransformSystems::Propagate),
+            );
     }
 }
 
@@ -92,6 +100,8 @@ fn spawn_player(
                 // detail in the darker propagated-light levels.
                 Tonemapping::AcesFitted,
                 ShadowFilteringMethod::Gaussian,
+                underwater::UnderwaterView::default(),
+                ColorGrading::default(),
                 skybox(skybox_image, game_time),
                 distance_fog(game_time),
                 Projection::from(PerspectiveProjection {

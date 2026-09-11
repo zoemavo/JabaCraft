@@ -13,6 +13,9 @@ use super::{
     ore::generate_ores_for_chunk,
 };
 
+/// Water occupies surface columns below this exclusive world Y boundary.
+pub const SEA_LEVEL: i32 = 8;
+
 const SUBSURFACE_DEPTH: i32 = 3;
 // These are conservative bounds derived from the current biome definitions.
 const MIN_TERRAIN_HEIGHT: i32 = -2;
@@ -81,7 +84,11 @@ fn terrain_block(
 ) -> BlockId {
     let surface_y = i64::from(surface_y);
     if world_y > surface_y {
-        BlockId::AIR
+        if world_y < i64::from(SEA_LEVEL) {
+            BlockId::WATER
+        } else {
+            BlockId::AIR
+        }
     } else if world_y == surface_y {
         surface_block
     } else if world_y >= surface_y - i64::from(SUBSURFACE_DEPTH) {
@@ -110,6 +117,45 @@ mod tests {
 
     fn generated_chunk(position: ChunkPos, seed: u64) -> Chunk {
         generate_terrain_chunk(position, seed, CaveSettings::default())
+    }
+
+    #[test]
+    fn water_fills_only_above_low_terrain_to_exclusive_sea_level() {
+        for surface in [-2, 0, SEA_LEVEL - 1, SEA_LEVEL, SEA_LEVEL + 2] {
+            for y in -6..=SEA_LEVEL + 3 {
+                let block = terrain_block(i64::from(y), surface, BlockId::GRASS, BlockId::DIRT);
+                assert_eq!(block == BlockId::WATER, y > surface && y < SEA_LEVEL);
+                if y == surface {
+                    assert_eq!(block, BlockId::GRASS);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generated_lowland_columns_have_continuous_water_and_no_submerged_trees() {
+        let seed = 42;
+        let sampler = BiomeSampler::new(seed);
+        let (x, z, height) = (-128..128)
+            .flat_map(|x| (-128..128).map(move |z| (x, z)))
+            .find_map(|(x, z)| {
+                let h = sampler.sample(x, z).terrain_height;
+                (h < SEA_LEVEL - 2).then_some((x, z, h))
+            })
+            .unwrap();
+        for y in height + 1..=SEA_LEVEL {
+            let world = crate::coordinates::WorldBlockPos::new(x as i32, y, z as i32);
+            let (position, local) = world.split();
+            let chunk = generated_chunk(position, seed);
+            assert_eq!(
+                chunk.get_local(local),
+                if y < SEA_LEVEL {
+                    BlockId::WATER
+                } else {
+                    BlockId::AIR
+                }
+            );
+        }
     }
 
     #[test]

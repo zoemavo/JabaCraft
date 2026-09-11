@@ -4,7 +4,25 @@ use bevy::prelude::*;
 
 /// Marks the entity controlled by the local player.
 #[derive(Component, Debug)]
+#[require(PlayerInWater)]
 pub struct Player;
+
+/// Water overlap with the player's collision volume, sampled from actual voxels.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct PlayerInWater {
+    /// Fraction of the body volume inside water, from 0 to 1.
+    pub submerged_fraction: f32,
+}
+
+impl PlayerInWater {
+    pub fn is_in_water(self) -> bool {
+        self.submerged_fraction > 0.0001
+    }
+
+    pub fn is_fully_submerged(self) -> bool {
+        self.submerged_fraction >= 0.9999
+    }
+}
 
 /// Marks the perspective camera parented to the player.
 #[derive(Component, Debug)]
@@ -75,6 +93,11 @@ pub struct PlayerSettings {
     pub gravity: f32,
     /// Maximum downward speed in world units per second.
     pub terminal_velocity: f32,
+    pub swim_speed: f32,
+    pub swim_up_speed: f32,
+    pub water_acceleration: f32,
+    pub water_gravity: f32,
+    pub water_terminal_velocity: f32,
     /// Width and depth of the player's collision bounds.
     pub player_width: f32,
     /// Height of the player's collision bounds.
@@ -97,6 +120,11 @@ impl Default for PlayerSettings {
             jump_speed: 8.0,
             gravity: 24.0,
             terminal_velocity: 50.0,
+            swim_speed: 2.2,
+            swim_up_speed: 3.0,
+            water_acceleration: 12.0,
+            water_gravity: 4.0,
+            water_terminal_velocity: 2.5,
             player_width: 0.6,
             player_height: 1.8,
             mouse_sensitivity: 0.0025,
