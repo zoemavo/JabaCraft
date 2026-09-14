@@ -114,6 +114,14 @@ impl ChunkGenerationQueue {
         self.transition(position, &[ChunkLifecycle::Meshing], ChunkLifecycle::Ready)
     }
 
+    pub(crate) fn retry_meshing(&mut self, position: ChunkPos) -> bool {
+        self.transition(
+            position,
+            &[ChunkLifecycle::Meshing],
+            ChunkLifecycle::Generated,
+        )
+    }
+
     fn transition(
         &mut self,
         position: ChunkPos,
@@ -172,6 +180,9 @@ mod tests {
         assert_eq!(queue.state(position), Some(ChunkLifecycle::Generated));
         assert!(queue.begin_meshing(position));
         assert_eq!(queue.state(position), Some(ChunkLifecycle::Meshing));
+        assert!(queue.retry_meshing(position));
+        assert_eq!(queue.state(position), Some(ChunkLifecycle::Generated));
+        assert!(queue.begin_meshing(position));
         assert!(queue.finish_meshing(position));
         assert_eq!(queue.state(position), Some(ChunkLifecycle::Ready));
         assert!(!queue.finish_generation(position));

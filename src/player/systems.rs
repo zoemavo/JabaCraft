@@ -22,7 +22,6 @@ pub(super) fn capture_cursor_on_startup(
 }
 
 pub(super) fn update_cursor_grab(
-    keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     inventory_state: Res<InventoryState>,
     mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
@@ -31,8 +30,6 @@ pub(super) fn update_cursor_grab(
         set_cursor_captured(&mut cursor, false);
     } else if inventory_state.is_changed() {
         set_cursor_captured(&mut cursor, true);
-    } else if keyboard.just_pressed(KeyCode::Escape) {
-        set_cursor_captured(&mut cursor, false);
     } else if mouse_buttons.just_pressed(MouseButton::Left) {
         set_cursor_captured(&mut cursor, true);
     }

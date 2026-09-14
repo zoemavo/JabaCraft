@@ -16,6 +16,7 @@ use streaming::{ChunkGenerationTasks, stream_chunks_around_player};
 
 pub use biome::{Biome, BiomeDefinition, BiomeSample, BiomeSampler};
 pub use cave::CaveSettings;
+pub(crate) use features::feature_block_at;
 pub use queue::{ChunkGenerationQueue, ChunkLifecycle};
 pub use terrain::{SEA_LEVEL, is_chunk_potentially_empty, terrain_height_at};
 
@@ -66,4 +67,9 @@ impl Plugin for GenerationPlugin {
                 stream_chunks_around_player.in_set(ChunkStreamingSet),
             );
     }
+}
+
+pub(crate) fn reset_session(world: &mut World) {
+    world.insert_resource(ChunkGenerationQueue::default());
+    world.insert_resource(ChunkGenerationTasks::default());
 }

@@ -12,3 +12,6 @@
 # Operating-system files
 .DS_Store
 Thumbs.db
+
+# Local user preferences
+/config/

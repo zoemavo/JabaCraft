@@ -5,7 +5,7 @@ use super::{
 };
 
 /// Central source of block behaviour and rendering metadata.
-#[derive(Debug, Resource)]
+#[derive(Clone, Debug, Resource)]
 pub struct BlockRegistry {
     definitions: [BlockDefinition; BUILTIN_BLOCK_COUNT],
 }

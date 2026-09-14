@@ -79,8 +79,13 @@ impl Plugin for SurvivalPlugin {
             .init_resource::<EatingProgress>()
             .add_systems(
                 FixedUpdate,
-                systems::update_survival_stats.after(PlayerPhysicsSet::ResolveCollisions),
+                systems::update_survival_stats
+                    .after(PlayerPhysicsSet::ResolveCollisions)
+                    .run_if(in_state(crate::game::GameState::Playing)),
             )
-            .add_systems(Update, systems::eat_selected_food);
+            .add_systems(
+                Update,
+                systems::eat_selected_food.run_if(in_state(crate::game::GameState::Playing)),
+            );
     }
 }

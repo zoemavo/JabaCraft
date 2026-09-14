@@ -96,7 +96,8 @@ impl Plugin for GameTimePlugin {
                 Update,
                 (toggle_debug_time_acceleration, advance_game_time)
                     .chain()
-                    .in_set(GameTimeUpdateSet),
+                    .in_set(GameTimeUpdateSet)
+                    .run_if(in_state(crate::game::GameState::Playing)),
             );
     }
 }

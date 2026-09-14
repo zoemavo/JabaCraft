@@ -45,7 +45,8 @@ pub(super) fn install_environment(app: &mut App) {
         Update,
         update_environment
             .after(GameTimeUpdateSet)
-            .in_set(EnvironmentUpdateSet),
+            .in_set(EnvironmentUpdateSet)
+            .run_if(in_state(crate::game::GameState::Playing)),
     );
 }
 
@@ -66,6 +67,10 @@ pub(super) fn spawn_environment(
             // Ambient fill keeps these filtered shadows low contrast. Limit
             // their range to avoid rendering the entire streamed world twice.
             shadow_maps_enabled: true,
+            // Voxel terrain contains long coplanar surfaces. A little more
+            // depth bias prevents warm, grazing sunlight from producing
+            // self-shadow stripes across the ground.
+            shadow_depth_bias: 0.04,
             ..default()
         },
         CascadeShadowConfigBuilder {

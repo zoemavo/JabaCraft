@@ -38,6 +38,7 @@ pub(super) fn generate_terrain_chunk(
         let mut chunk = Chunk::new(BlockId::STONE);
         carve_caves(&mut chunk, position, seed, sampler, cave_settings);
         generate_ores_for_chunk(&mut chunk, position, seed, sampler);
+        chunk.mark_saved();
         return chunk;
     }
 
@@ -73,6 +74,7 @@ pub(super) fn generate_terrain_chunk(
     carve_caves(&mut chunk, position, seed, sampler, cave_settings);
     generate_ores_for_chunk(&mut chunk, position, seed, sampler);
     generate_features_for_chunk(&mut chunk, position, seed, sampler);
+    chunk.mark_saved();
     chunk
 }
 

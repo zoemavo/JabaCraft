@@ -30,7 +30,8 @@ impl Plugin for ItemPlugin {
                     dropped::apply_dropped_item_physics,
                     dropped::pickup_dropped_items,
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(in_state(crate::game::GameState::Playing)),
             );
     }
 }

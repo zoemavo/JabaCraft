@@ -1,12 +1,17 @@
 use std::collections::{HashMap, HashSet};
 
-use bevy::{light::NotShadowCaster, prelude::*};
+use bevy::{
+    light::NotShadowCaster,
+    prelude::*,
+    tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
+};
 
 use crate::{
     block::BlockRegistry,
     chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, ChunkStorage},
     coordinates::ChunkPos,
     generation::{ChunkGenerationQueue, ChunkLifecycle, GenerationSettings},
+    player::Player,
 };
 
 use super::{
@@ -39,6 +44,20 @@ struct RenderedChunk {
 #[derive(Debug, Default, Resource)]
 pub struct ChunkRenderer {
     rendered: HashMap<ChunkPos, RenderedChunk>,
+}
+
+struct MeshingResult {
+    position: ChunkPos,
+    revision: u64,
+    seed: u64,
+    meshes: ChunkMeshes,
+}
+
+/// Owns worker handles. Workers receive immutable owned snapshots and never
+/// access ECS resources or Bevy asset collections.
+#[derive(Default, Resource)]
+pub(super) struct ChunkMeshingTasks {
+    running: HashMap<ChunkPos, Task<MeshingResult>>,
 }
 
 impl ChunkRenderer {
@@ -84,6 +103,7 @@ impl ChunkRenderer {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn sync_chunk_renderer(
     mut commands: Commands,
     mut storage: ResMut<ChunkStorage>,
@@ -94,8 +114,23 @@ pub(super) fn sync_chunk_renderer(
     mut generation_queue: ResMut<ChunkGenerationQueue>,
     mut renderer: ResMut<ChunkRenderer>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut tasks: ResMut<ChunkMeshingTasks>,
+    players: Query<&Transform, With<Player>>,
 ) {
     despawn_unloaded_chunks(&mut commands, &storage, &mut renderer, &mut meshes);
+
+    for result in take_completed_tasks(&mut tasks) {
+        apply_meshing_result(
+            result,
+            &mut commands,
+            &material,
+            &mut meshes,
+            &generation_settings,
+            &mut storage,
+            &mut generation_queue,
+            &mut renderer,
+        );
+    }
 
     let mut pending = storage
         .iter()
@@ -104,51 +139,127 @@ pub(super) fn sync_chunk_renderer(
                 generation_queue.state(position),
                 Some(ChunkLifecycle::Generated | ChunkLifecycle::Ready)
             );
-            (can_mesh && (!renderer.contains(position) || chunk.is_dirty())).then_some(position)
+            (can_mesh
+                && !tasks.running.contains_key(&position)
+                && (!renderer.contains(position) || chunk.is_dirty()))
+            .then_some(position)
         })
         .collect::<Vec<_>>();
-    pending.sort_unstable_by_key(distance_from_origin_squared);
+    let center = players
+        .single()
+        .map(|transform| chunk_position_from_translation(transform.translation))
+        .unwrap_or_default();
+    pending.sort_unstable_by_key(|position| distance_squared(*position, center));
 
-    for position in pending.into_iter().take(settings.rebuild_budget_per_frame) {
+    let available_slots = settings
+        .max_concurrent_jobs
+        .saturating_sub(tasks.running.len());
+    let start_count = available_slots.min(settings.start_budget_per_frame);
+    let pool = AsyncComputeTaskPool::get();
+
+    for position in pending.into_iter().take(start_count) {
         if !generation_queue.begin_meshing(position) {
             continue;
         }
-        let rebuilt_mesh =
-            build_chunk_mesh(position, &storage, &registry, generation_settings.seed);
-
-        if let Some(rendered) = renderer.rendered.get_mut(&position) {
-            apply_rebuilt_mesh(
-                &mut commands,
-                &material,
-                &mut meshes,
+        let revision = storage
+            .get_chunk(position)
+            .expect("meshing candidates must remain loaded during this system")
+            .mesh_revision();
+        let snapshot = storage.meshing_snapshot(position);
+        let registry = registry.clone();
+        let seed = generation_settings.seed;
+        let task = pool.spawn(async move {
+            MeshingResult {
                 position,
-                rendered,
-                rebuilt_mesh,
-            );
-            rendered.revision = rendered.revision.saturating_add(1);
-        } else {
-            let mut rendered = RenderedChunk {
-                opaque: RenderedPart::default(),
-                water: RenderedPart::default(),
-                revision: 1,
-            };
-            apply_rebuilt_mesh(
-                &mut commands,
-                &material,
-                &mut meshes,
-                position,
-                &mut rendered,
-                rebuilt_mesh,
-            );
-            renderer.rendered.insert(position, rendered);
-        }
-
-        if let Some(chunk) = storage.get_chunk_mut(position) {
-            chunk.mark_clean();
-        }
-        let transitioned = generation_queue.finish_meshing(position);
-        debug_assert!(transitioned, "meshing job must be in Meshing state");
+                revision,
+                seed,
+                meshes: build_chunk_mesh(position, &snapshot, &registry, seed),
+            }
+        });
+        let previous = tasks.running.insert(position, task);
+        debug_assert!(
+            previous.is_none(),
+            "a chunk must have at most one mesh task"
+        );
     }
+}
+
+fn take_completed_tasks(tasks: &mut ChunkMeshingTasks) -> Vec<MeshingResult> {
+    let completed = tasks
+        .running
+        .values_mut()
+        .filter_map(check_ready)
+        .collect::<Vec<_>>();
+    for result in &completed {
+        tasks.running.remove(&result.position);
+    }
+    completed
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_meshing_result(
+    result: MeshingResult,
+    commands: &mut Commands,
+    material: &ChunkMaterial,
+    meshes: &mut Assets<Mesh>,
+    settings: &GenerationSettings,
+    storage: &mut ChunkStorage,
+    queue: &mut ChunkGenerationQueue,
+    renderer: &mut ChunkRenderer,
+) -> bool {
+    let current_revision = storage
+        .get_chunk(result.position)
+        .map(|chunk| chunk.mesh_revision());
+    let is_current = result.seed == settings.seed
+        && current_revision == Some(result.revision)
+        && queue.state(result.position) == Some(ChunkLifecycle::Meshing);
+
+    if !is_current {
+        if queue.state(result.position) == Some(ChunkLifecycle::Meshing) {
+            if current_revision.is_some() {
+                let transitioned = queue.retry_meshing(result.position);
+                debug_assert!(transitioned, "stale mesh must return to Generated");
+            } else {
+                queue.cancel(result.position);
+            }
+        }
+        return false;
+    }
+
+    if let Some(rendered) = renderer.rendered.get_mut(&result.position) {
+        apply_rebuilt_mesh(
+            commands,
+            material,
+            meshes,
+            result.position,
+            rendered,
+            result.meshes,
+        );
+        rendered.revision = result.revision;
+    } else {
+        let mut rendered = RenderedChunk {
+            opaque: RenderedPart::default(),
+            water: RenderedPart::default(),
+            revision: result.revision,
+        };
+        apply_rebuilt_mesh(
+            commands,
+            material,
+            meshes,
+            result.position,
+            &mut rendered,
+            result.meshes,
+        );
+        renderer.rendered.insert(result.position, rendered);
+    }
+
+    storage
+        .get_chunk_mut(result.position)
+        .expect("validated mesh result must still have a loaded chunk")
+        .mark_clean();
+    let transitioned = queue.finish_meshing(result.position);
+    debug_assert!(transitioned, "accepted mesh task must be in Meshing state");
+    true
 }
 
 fn apply_rebuilt_mesh(
@@ -180,9 +291,9 @@ fn apply_rebuilt_mesh(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn apply_part(
+fn apply_part<M: bevy::pbr::Material>(
     commands: &mut Commands,
-    material: &Handle<StandardMaterial>,
+    material: &Handle<M>,
     meshes: &mut Assets<Mesh>,
     position: ChunkPos,
     rendered: &mut RenderedPart,
@@ -271,8 +382,19 @@ fn despawn_unloaded_chunks(
     });
 }
 
-fn distance_from_origin_squared(position: &ChunkPos) -> i64 {
-    i64::from(position.x).pow(2) + i64::from(position.y).pow(2) + i64::from(position.z).pow(2)
+fn chunk_position_from_translation(translation: Vec3) -> ChunkPos {
+    ChunkPos::new(
+        (translation.x / CHUNK_WIDTH as f32).floor() as i32,
+        (translation.y / CHUNK_HEIGHT as f32).floor() as i32,
+        (translation.z / CHUNK_DEPTH as f32).floor() as i32,
+    )
+}
+
+fn distance_squared(position: ChunkPos, center: ChunkPos) -> i64 {
+    let dx = i64::from(position.x) - i64::from(center.x);
+    let dy = i64::from(position.y) - i64::from(center.y);
+    let dz = i64::from(position.z) - i64::from(center.z);
+    dx * dx + dy * dy + dz * dz
 }
 
 #[cfg(test)]
@@ -283,18 +405,44 @@ mod tests {
 
     fn renderer_test_app() -> App {
         let mut app = App::new();
-        app.init_resource::<Assets<Mesh>>()
+        app.add_plugins(bevy::app::TaskPoolPlugin::default())
+            .init_resource::<Assets<Mesh>>()
             .init_resource::<ChunkStorage>()
             .init_resource::<ChunkGenerationQueue>()
+            .init_resource::<ChunkMeshingTasks>()
             .init_resource::<ChunkRenderer>()
             .insert_resource(BlockRegistry::default())
             .insert_resource(GenerationSettings::default())
             .insert_resource(MeshingSettings {
-                rebuild_budget_per_frame: usize::MAX,
+                max_concurrent_jobs: usize::MAX,
+                start_budget_per_frame: usize::MAX,
             })
             .insert_resource(ChunkMaterial(Handle::default(), Handle::default()))
             .add_systems(Update, sync_chunk_renderer);
         app
+    }
+
+    fn finish_meshing(app: &mut App) {
+        for _ in 0..10_000 {
+            app.update();
+            let no_tasks = app
+                .world()
+                .resource::<ChunkMeshingTasks>()
+                .running
+                .is_empty();
+            let all_loaded_ready = {
+                let storage = app.world().resource::<ChunkStorage>();
+                let queue = app.world().resource::<ChunkGenerationQueue>();
+                storage
+                    .iter()
+                    .all(|(position, _)| queue.state(position) == Some(ChunkLifecycle::Ready))
+            };
+            if no_tasks && all_loaded_ready {
+                return;
+            }
+            std::thread::yield_now();
+        }
+        panic!("meshing workers did not settle");
     }
 
     fn insert_chunk(app: &mut App, position: ChunkPos, fill: BlockId) {
@@ -318,7 +466,7 @@ mod tests {
             storage.set_block(stone, BlockId::STONE).unwrap();
             storage.set_block(water, BlockId::WATER).unwrap();
         }
-        app.update();
+        finish_meshing(&mut app);
         let renderer = app.world().resource::<ChunkRenderer>();
         let opaque_entity = renderer.entity(position).unwrap();
         let water_entity = renderer.water_entity(position).unwrap();
@@ -331,7 +479,7 @@ mod tests {
             .resource_mut::<ChunkStorage>()
             .set_block(stone, BlockId::AIR)
             .unwrap();
-        app.update();
+        finish_meshing(&mut app);
         let renderer = app.world().resource::<ChunkRenderer>();
         assert_eq!(renderer.entity(position), None);
         assert_eq!(renderer.water_entity(position), Some(water_entity));
@@ -342,7 +490,7 @@ mod tests {
             .resource_mut::<ChunkStorage>()
             .set_block(water, BlockId::AIR)
             .unwrap();
-        app.update();
+        finish_meshing(&mut app);
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
         app.world_mut()
             .resource_mut::<ChunkStorage>()
@@ -352,12 +500,12 @@ mod tests {
             .resource_mut::<ChunkStorage>()
             .set_block(stone, BlockId::STONE)
             .unwrap();
-        app.update();
+        finish_meshing(&mut app);
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 2);
         app.world_mut()
             .resource_mut::<ChunkStorage>()
             .remove_chunk(position);
-        app.update();
+        finish_meshing(&mut app);
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
         let world = app.world_mut();
         assert_eq!(world.query::<&ChunkMesh>().iter(world).count(), 0);
@@ -369,7 +517,7 @@ mod tests {
         let left = ChunkPos::new(0, 0, 0);
         let right = ChunkPos::new(1, 0, 0);
         insert_chunk(&mut app, left, BlockId::WATER);
-        app.update();
+        finish_meshing(&mut app);
         let count = |app: &App| {
             let handle = app
                 .world()
@@ -384,12 +532,12 @@ mod tests {
         };
         let exposed = count(&app);
         insert_chunk(&mut app, right, BlockId::WATER);
-        app.update();
+        finish_meshing(&mut app);
         assert_eq!(exposed - count(&app), CHUNK_HEIGHT * CHUNK_DEPTH * 4);
         app.world_mut()
             .resource_mut::<ChunkStorage>()
             .remove_chunk(right);
-        app.update();
+        finish_meshing(&mut app);
         assert_eq!(count(&app), exposed);
     }
 
@@ -399,7 +547,7 @@ mod tests {
         let position = ChunkPos::new(0, 0, 0);
         insert_chunk(&mut app, position, BlockId::STONE);
 
-        app.update();
+        finish_meshing(&mut app);
 
         let renderer = app.world().resource::<ChunkRenderer>();
         assert_eq!(renderer.len(), 1);
@@ -426,7 +574,7 @@ mod tests {
         let mut app = renderer_test_app();
         let position = ChunkPos::new(0, 0, 0);
         insert_chunk(&mut app, position, BlockId::STONE);
-        app.update();
+        finish_meshing(&mut app);
 
         let (entity, mesh_id) = {
             let renderer = app.world().resource::<ChunkRenderer>();
@@ -443,7 +591,7 @@ mod tests {
                 .resource_mut::<ChunkStorage>()
                 .set_block(WorldBlockPos::new(1, 1, 1), block)
                 .unwrap();
-            app.update();
+            finish_meshing(&mut app);
 
             let renderer = app.world().resource::<ChunkRenderer>();
             assert_eq!(renderer.entity(position), Some(entity));
@@ -462,16 +610,16 @@ mod tests {
         for position in [changed, neighbor, unrelated] {
             insert_chunk(&mut app, position, BlockId::STONE);
         }
-        app.update();
+        finish_meshing(&mut app);
 
         app.world_mut()
             .resource_mut::<ChunkStorage>()
             .set_block(WorldBlockPos::new(15, 1, 1), BlockId::AIR)
             .unwrap();
-        app.update();
+        finish_meshing(&mut app);
 
         let renderer = app.world().resource::<ChunkRenderer>();
-        assert_eq!(renderer.revision(changed), Some(2));
+        assert_eq!(renderer.revision(changed), Some(3));
         assert_eq!(renderer.revision(neighbor), Some(2));
         assert_eq!(renderer.revision(unrelated), Some(1));
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 3);
@@ -484,16 +632,16 @@ mod tests {
         let neighbor = ChunkPos::new(1, 0, 0);
         insert_chunk(&mut app, changed, BlockId::STONE);
         insert_chunk(&mut app, neighbor, BlockId::STONE);
-        app.update();
+        finish_meshing(&mut app);
 
         app.world_mut()
             .resource_mut::<ChunkStorage>()
             .set_block(WorldBlockPos::new(1, 1, 1), BlockId::AIR)
             .unwrap();
-        app.update();
+        finish_meshing(&mut app);
 
         let renderer = app.world().resource::<ChunkRenderer>();
-        assert_eq!(renderer.revision(changed), Some(2));
+        assert_eq!(renderer.revision(changed), Some(3));
         assert_eq!(renderer.revision(neighbor), Some(1));
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 2);
     }
@@ -503,12 +651,12 @@ mod tests {
         let mut app = renderer_test_app();
         let position = ChunkPos::new(-1, 0, 2);
         insert_chunk(&mut app, position, BlockId::STONE);
-        app.update();
+        finish_meshing(&mut app);
 
         app.world_mut()
             .resource_mut::<ChunkStorage>()
             .remove_chunk(position);
-        app.update();
+        finish_meshing(&mut app);
 
         assert!(app.world().resource::<ChunkRenderer>().is_empty());
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
@@ -526,8 +674,7 @@ mod tests {
         let position = ChunkPos::new(0, 1, 0);
         insert_chunk(&mut app, position, BlockId::AIR);
 
-        app.update();
-        app.update();
+        finish_meshing(&mut app);
 
         let renderer = app.world().resource::<ChunkRenderer>();
         assert!(renderer.contains(position));
@@ -540,7 +687,7 @@ mod tests {
             .resource_mut::<ChunkStorage>()
             .set_block(WorldBlockPos::new(1, 17, 1), BlockId::STONE)
             .unwrap();
-        app.update();
+        finish_meshing(&mut app);
         assert!(
             app.world()
                 .resource::<ChunkRenderer>()
@@ -553,11 +700,44 @@ mod tests {
             .resource_mut::<ChunkStorage>()
             .set_block(WorldBlockPos::new(1, 17, 1), BlockId::AIR)
             .unwrap();
-        app.update();
+        finish_meshing(&mut app);
         let renderer = app.world().resource::<ChunkRenderer>();
         assert_eq!(renderer.revision(position), Some(3));
         assert_eq!(renderer.entity(position), None);
         assert_eq!(renderer.mesh(position), None);
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
+    }
+
+    #[test]
+    fn stale_worker_result_is_discarded_and_remeshed_at_latest_revision() {
+        let mut app = renderer_test_app();
+        let position = ChunkPos::default();
+        insert_chunk(&mut app, position, BlockId::STONE);
+
+        // The first update may only schedule CPU work. Mesh assets are owned
+        // by the main world and are not created inside the worker.
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<ChunkGenerationQueue>()
+                .state(position),
+            Some(ChunkLifecycle::Meshing)
+        );
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
+
+        app.world_mut()
+            .resource_mut::<ChunkStorage>()
+            .set_block(WorldBlockPos::new(1, 1, 1), BlockId::AIR)
+            .unwrap();
+        finish_meshing(&mut app);
+
+        let renderer = app.world().resource::<ChunkRenderer>();
+        assert_eq!(renderer.revision(position), Some(2));
+        assert_eq!(
+            app.world()
+                .resource::<ChunkGenerationQueue>()
+                .state(position),
+            Some(ChunkLifecycle::Ready)
+        );
     }
 }

@@ -36,7 +36,9 @@ impl Plugin for InventoryPlugin {
             .init_resource::<InventoryState>()
             .configure_sets(
                 PreUpdate,
-                (InventoryInputSet::Toggle, InventoryInputSet::Hotbar).chain(),
+                (InventoryInputSet::Toggle, InventoryInputSet::Hotbar)
+                    .chain()
+                    .run_if(in_state(crate::game::GameState::Playing)),
             )
             .add_systems(
                 PreUpdate,

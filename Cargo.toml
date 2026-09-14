@@ -4,8 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+tempfile = "3"
+ron = "0.12"
 bevy = { version = "0.19", default-features = false, features = [
     "std",
+    "multi_threaded",
+    "bevy_audio",
     "bevy_log",
     "bevy_gizmos",
     "bevy_pbr",

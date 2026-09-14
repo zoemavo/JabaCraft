@@ -105,7 +105,8 @@ impl Plugin for InteractionPlugin {
                     cracks::sync_block_crack_overlay,
                 )
                     .chain()
-                    .after(TransformSystems::Propagate),
+                    .after(TransformSystems::Propagate)
+                    .run_if(in_state(crate::game::GameState::Playing)),
             );
     }
 }

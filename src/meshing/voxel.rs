@@ -45,10 +45,11 @@ fn build_chunk_mesh_buffers(
     storage: &ChunkStorage,
     registry: &BlockRegistry,
 ) -> ChunkMeshBuffers {
-    build_chunk_mesh_buffers_with_seed(chunk_position, storage, registry, 0).opaque
+    build_chunk_mesh_buffers_naive(chunk_position, storage, registry, 0).opaque
 }
 
-fn build_chunk_mesh_buffers_with_seed(
+#[cfg(test)]
+fn build_chunk_mesh_buffers_naive(
     chunk_position: ChunkPos,
     storage: &ChunkStorage,
     registry: &BlockRegistry,
@@ -100,10 +101,136 @@ fn build_chunk_mesh_buffers_with_seed(
     buffers
 }
 
+/// Greedy rectangles are restricted to constant vertex light/AO. This conservative
+/// rule preserves the old piecewise-linear lighting exactly, including diagonals.
+#[derive(Clone, Copy, PartialEq)]
+struct MergeKey {
+    block: BlockId,
+    texture: TextureIndex,
+    color: [f32; 4],
+}
+
+fn build_chunk_mesh_buffers_with_seed(
+    position: ChunkPos,
+    storage: &ChunkStorage,
+    registry: &BlockRegistry,
+    seed: u64,
+) -> SplitBuffers {
+    let Some(chunk) = storage.get_chunk(position) else {
+        return SplitBuffers::default();
+    };
+    if chunk.is_all_air() {
+        return SplitBuffers::default();
+    }
+    let mut output = SplitBuffers::default();
+    let mut lightmap = None;
+    let dimensions = [CHUNK_WIDTH, CHUNK_HEIGHT, CHUNK_DEPTH];
+    for face in FACES {
+        let axis = face.normal.iter().position(|n| *n != 0.0).unwrap();
+        let a = if axis == 0 { 1 } else { 0 };
+        let b = if axis == 2 { 1 } else { 2 };
+        let width = dimensions[a];
+        let height = dimensions[b];
+        let mut mask = vec![None; width * height];
+        for slice in 0..dimensions[axis] {
+            mask.fill(None);
+            for v in 0..height {
+                for u in 0..width {
+                    let mut cell = [0; 3];
+                    cell[axis] = slice;
+                    cell[a] = u;
+                    cell[b] = v;
+                    let local = LocalBlockPos::new(cell[0], cell[1], cell[2]).unwrap();
+                    let block = chunk.get_local(local);
+                    if block == BlockId::AIR {
+                        continue;
+                    }
+                    let world = position.world_block(local);
+                    if !is_face_visible_for_block(world, block, face, storage, registry) {
+                        continue;
+                    }
+                    let lights = lightmap.get_or_insert_with(|| {
+                        ChunkLightMap::build(position, storage, registry, seed)
+                    });
+                    let colors = face
+                        .vertices
+                        .map(|vertex| vertex_light_color(world, face.block_face, vertex, lights));
+                    let texture = registry.texture_for(block, face.block_face);
+                    if !registry.is_transparent(block) && colors.iter().all(|c| *c == colors[0]) {
+                        mask[v * width + u] = Some(MergeKey {
+                            block,
+                            texture,
+                            color: colors[0],
+                        });
+                    } else {
+                        let target = if block == BlockId::WATER {
+                            &mut output.water
+                        } else {
+                            &mut output.opaque
+                        };
+                        target.push_quad(cell.map(|n| n as f32), face, texture, colors, [1.0; 3]);
+                    }
+                }
+            }
+            for v in 0..height {
+                for u in 0..width {
+                    let Some(key) = mask[v * width + u] else {
+                        continue;
+                    };
+                    let mut w = 1;
+                    while u + w < width && mask[v * width + u + w] == Some(key) {
+                        w += 1;
+                    }
+                    let mut h = 1;
+                    while v + h < height
+                        && (0..w).all(|x| mask[(v + h) * width + u + x] == Some(key))
+                    {
+                        h += 1;
+                    }
+                    for y in v..v + h {
+                        for x in u..u + w {
+                            mask[y * width + x] = None;
+                        }
+                    }
+                    let mut origin = [0.0; 3];
+                    origin[axis] = slice as f32;
+                    origin[a] = u as f32;
+                    origin[b] = v as f32;
+                    let mut extent = [1.0; 3];
+                    extent[a] = w as f32;
+                    extent[b] = h as f32;
+                    output
+                        .opaque
+                        .push_quad(origin, face, key.texture, [key.color; 4], extent);
+                }
+            }
+        }
+    }
+    output
+}
+
+fn is_face_visible_for_block(
+    position: WorldBlockPos,
+    block: BlockId,
+    face: Face,
+    storage: &ChunkStorage,
+    registry: &BlockRegistry,
+) -> bool {
+    let neighbor = WorldBlockPos::new(
+        position.x + face.neighbor[0],
+        position.y + face.neighbor[1],
+        position.z + face.neighbor[2],
+    );
+    storage.get_block(neighbor).is_none_or(|other| {
+        registry.is_transparent(other) && !(block == BlockId::WATER && other == BlockId::WATER)
+    })
+}
+
 /// A face is visible when the adjacent world block is absent, air, or transparent.
 ///
 /// Looking up by world position is essential: the same code handles neighbors
 /// inside the current chunk and neighbors stored in an adjacent chunk.
+#[cfg(test)]
 fn is_face_visible(
     block_position: WorldBlockPos,
     face: Face,
@@ -129,10 +256,12 @@ struct ChunkMeshBuffers {
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
     colors: Vec<[f32; 4]>,
+    repeats: Vec<[f32; 2]>,
     indices: Vec<u32>,
 }
 
 impl ChunkMeshBuffers {
+    #[cfg(test)]
     fn push_face(
         &mut self,
         block: [f32; 3],
@@ -141,28 +270,46 @@ impl ChunkMeshBuffers {
         texture: TextureIndex,
         lights: &ChunkLightMap,
     ) {
-        let first_vertex = self.positions.len() as u32;
-        let uvs = face_uvs(texture, face.block_face);
+        let colors = face
+            .vertices
+            .map(|vertex| vertex_light_color(world, face.block_face, vertex, lights));
+        self.push_quad(block, face, texture, colors, [1.0; 3]);
+    }
 
-        for (vertex, uv) in face.vertices.into_iter().zip(uvs) {
-            self.positions.push([
-                block[0] + vertex[0],
-                block[1] + vertex[1],
-                block[2] + vertex[2],
-            ]);
+    fn push_quad(
+        &mut self,
+        block: [f32; 3],
+        face: Face,
+        texture: TextureIndex,
+        colors: [[f32; 4]; 4],
+        extent: [f32; 3],
+    ) {
+        let first = self.positions.len() as u32;
+        let uvs = face_uvs(texture, face.block_face);
+        let unit = match face.block_face {
+            BlockFace::North | BlockFace::South => [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+            _ => [[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+        };
+        let repeats = match face.block_face {
+            BlockFace::East | BlockFace::West => [extent[2], extent[1]],
+            BlockFace::Top | BlockFace::Bottom => [extent[0], extent[2]],
+            _ => [extent[0], extent[1]],
+        };
+        for i in 0..4 {
+            self.positions.push(std::array::from_fn(|axis| {
+                block[axis] + face.vertices[i][axis] * extent[axis]
+            }));
             self.normals.push(face.normal);
-            self.uvs.push(uv);
-            self.colors
-                .push(vertex_light_color(world, face.block_face, vertex, lights));
+            self.uvs.push(uvs[i]);
+            self.colors.push(colors[i]);
+            self.repeats.push(if repeats == [1.0; 2] {
+                [-1.0; 2]
+            } else {
+                [unit[i][0] * repeats[0], unit[i][1] * repeats[1]]
+            });
         }
-        self.indices.extend_from_slice(&[
-            first_vertex,
-            first_vertex + 1,
-            first_vertex + 2,
-            first_vertex,
-            first_vertex + 2,
-            first_vertex + 3,
-        ]);
+        self.indices
+            .extend_from_slice(&[first, first + 1, first + 2, first, first + 2, first + 3]);
     }
 
     fn into_mesh(self) -> Mesh {
@@ -174,6 +321,7 @@ impl ChunkMeshBuffers {
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, self.repeats)
         .with_inserted_indices(Indices::U32(self.indices))
     }
 }
@@ -574,3 +722,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "greedy_tests.rs"]
+mod greedy_tests;

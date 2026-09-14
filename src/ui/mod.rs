@@ -3,6 +3,7 @@
 mod crosshair;
 mod inventory_panel;
 mod item_icons;
+mod save_indicator;
 mod survival_hud;
 
 use bevy::prelude::*;
@@ -10,6 +11,7 @@ use bevy::prelude::*;
 use crate::{
     inventory::{HOTBAR_SLOT_COUNT, InventoryState, PlayerInventory},
     item::ItemRegistry,
+    persistence::PersistenceSaveSet,
 };
 
 use item_icons::{ItemIconAssets, set_item_icon};
@@ -48,13 +50,17 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UiSettings>()
             .add_systems(
-                Startup,
+                OnTransition {
+                    exited: crate::game::GameState::Loading,
+                    entered: crate::game::GameState::Playing,
+                },
                 (
                     item_icons::load_item_icons,
                     spawn_hotbar,
                     inventory_panel::spawn_inventory_panel,
                     crosshair::spawn_crosshair,
                     survival_hud::spawn_survival_hud,
+                    save_indicator::spawn_save_indicator,
                 ),
             )
             .add_systems(
@@ -62,7 +68,8 @@ impl Plugin for UiPlugin {
                 (
                     inventory_panel::handle_inventory_clicks,
                     inventory_panel::handle_crafting_click,
-                ),
+                )
+                    .run_if(in_state(crate::game::GameState::Playing)),
             )
             .add_systems(
                 Last,
@@ -74,7 +81,9 @@ impl Plugin for UiPlugin {
                     inventory_panel::sync_item_tooltip,
                     crosshair::sync_crosshair_visibility,
                     survival_hud::sync_survival_hud,
-                ),
+                    save_indicator::sync_save_indicator.after(PersistenceSaveSet),
+                )
+                    .run_if(in_state(crate::game::GameState::Playing)),
             );
     }
 }

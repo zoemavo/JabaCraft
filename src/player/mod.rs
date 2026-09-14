@@ -36,7 +36,9 @@ impl Plugin for PlayerPlugin {
             .insert_resource(Time::<Fixed>::from_hz(PLAYER_PHYSICS_HZ))
             .configure_sets(
                 PreUpdate,
-                (PlayerPhysicsSet::Cursor, PlayerPhysicsSet::ReadInput).chain(),
+                (PlayerPhysicsSet::Cursor, PlayerPhysicsSet::ReadInput)
+                    .chain()
+                    .run_if(in_state(crate::game::GameState::Playing)),
             )
             .configure_sets(
                 FixedUpdate,
@@ -46,9 +48,13 @@ impl Plugin for PlayerPlugin {
                     PlayerPhysicsSet::ResolveCollisions,
                     PlayerPhysicsSet::RefreshWater,
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(in_state(crate::game::GameState::Playing)),
             )
-            .add_systems(Startup, systems::capture_cursor_on_startup)
+            .add_systems(
+                OnEnter(crate::game::GameState::Playing),
+                systems::capture_cursor_on_startup,
+            )
             .add_systems(
                 PreUpdate,
                 systems::update_cursor_grab
@@ -83,7 +89,9 @@ impl Plugin for PlayerPlugin {
             )
             .add_systems(
                 Update,
-                systems::sync_view_transforms.in_set(PlayerPhysicsSet::SyncView),
+                systems::sync_view_transforms
+                    .in_set(PlayerPhysicsSet::SyncView)
+                    .run_if(in_state(crate::game::GameState::Playing)),
             );
     }
 }

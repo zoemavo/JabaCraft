@@ -19,6 +19,8 @@ pub use crate::coordinates::{
 pub struct Chunk {
     blocks: Box<[BlockId]>,
     dirty: bool,
+    save_dirty: bool,
+    mesh_revision: u64,
 }
 
 impl Chunk {
@@ -27,6 +29,8 @@ impl Chunk {
         Self {
             blocks: vec![fill; CHUNK_VOLUME].into_boxed_slice(),
             dirty: true,
+            save_dirty: false,
+            mesh_revision: 1,
         }
     }
 
@@ -64,6 +68,8 @@ impl Chunk {
         if previous != block {
             self.blocks[index] = block;
             self.dirty = true;
+            self.save_dirty = true;
+            self.bump_mesh_revision();
         }
 
         Ok(previous)
@@ -76,6 +82,8 @@ impl Chunk {
         if previous != block {
             self.blocks[index] = block;
             self.dirty = true;
+            self.save_dirty = true;
+            self.bump_mesh_revision();
         }
 
         previous
@@ -100,6 +108,36 @@ impl Chunk {
 
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
+        self.bump_mesh_revision();
+    }
+
+    pub const fn mesh_revision(&self) -> u64 {
+        self.mesh_revision
+    }
+
+    fn bump_mesh_revision(&mut self) {
+        self.mesh_revision = self.mesh_revision.saturating_add(1);
+    }
+
+    pub const fn is_save_dirty(&self) -> bool {
+        self.save_dirty
+    }
+
+    /// Marks the current voxel contents as durable without affecting meshing.
+    pub fn mark_saved(&mut self) {
+        self.save_dirty = false;
+    }
+
+    pub(crate) fn from_saved_blocks(blocks: Vec<BlockId>) -> Result<Self, usize> {
+        if blocks.len() != CHUNK_VOLUME {
+            return Err(blocks.len());
+        }
+        Ok(Self {
+            blocks: blocks.into_boxed_slice(),
+            dirty: true,
+            save_dirty: false,
+            mesh_revision: 1,
+        })
     }
 }
 
@@ -133,11 +171,18 @@ impl std::error::Error for ChunkBoundsError {}
 #[derive(Debug, Default, Resource)]
 pub struct ChunkStorage {
     chunks: HashMap<ChunkPos, Chunk>,
+    /// Saved and unsaved player-modified chunks retained across streaming unloads.
+    saved_overrides: HashMap<ChunkPos, Chunk>,
 }
 
 impl ChunkStorage {
     /// Inserts a loaded chunk, returning the chunk previously stored at this position.
     pub fn insert_chunk(&mut self, position: ChunkPos, chunk: Chunk) -> Option<Chunk> {
+        let chunk = self
+            .saved_overrides
+            .get(&position)
+            .cloned()
+            .unwrap_or(chunk);
         let previous = self.chunks.insert(position, chunk);
         self.mark_face_neighbors_dirty(position);
         previous
@@ -146,6 +191,9 @@ impl ChunkStorage {
     /// Removes and returns a loaded chunk.
     pub fn remove_chunk(&mut self, position: ChunkPos) -> Option<Chunk> {
         let removed = self.chunks.remove(&position);
+        if let Some(chunk) = removed.as_ref().filter(|chunk| chunk.is_save_dirty()) {
+            self.saved_overrides.insert(position, chunk.clone());
+        }
         if removed.is_some() {
             self.mark_face_neighbors_dirty(position);
         }
@@ -169,6 +217,82 @@ impl ChunkStorage {
         self.chunks
             .iter()
             .map(|(&position, chunk)| (position, chunk))
+    }
+
+    /// Copies only the 3x3x3 neighborhood needed by geometry visibility and
+    /// the bounded voxel light map. The owned snapshot is safe to move to a
+    /// worker without granting it access to the ECS world.
+    pub(crate) fn meshing_snapshot(&self, center: ChunkPos) -> Self {
+        let mut chunks = HashMap::new();
+        for y in (center.y - 1)..=(center.y + 1) {
+            for z in (center.z - 1)..=(center.z + 1) {
+                for x in (center.x - 1)..=(center.x + 1) {
+                    let position = ChunkPos::new(x, y, z);
+                    if let Some(chunk) = self.chunks.get(&position) {
+                        chunks.insert(position, chunk.clone());
+                    }
+                }
+            }
+        }
+        Self {
+            chunks,
+            saved_overrides: HashMap::new(),
+        }
+    }
+
+    /// Installs a durable player-modified chunk loaded before streaming begins.
+    pub(crate) fn insert_saved_override(&mut self, position: ChunkPos, mut chunk: Chunk) {
+        chunk.mark_saved();
+        self.saved_overrides.insert(position, chunk);
+    }
+
+    /// Returns all modified chunks, replacing older retained copies with live data.
+    pub(crate) fn save_snapshot(&self) -> Vec<(ChunkPos, Vec<BlockId>)> {
+        let mut chunks = self
+            .saved_overrides
+            .iter()
+            .map(|(&position, chunk)| (position, chunk.blocks().to_vec()))
+            .collect::<HashMap<_, _>>();
+        for (position, chunk) in &self.chunks {
+            if chunk.is_save_dirty() || chunks.contains_key(position) {
+                chunks.insert(*position, chunk.blocks().to_vec());
+            }
+        }
+        let mut chunks = chunks.into_iter().collect::<Vec<_>>();
+        chunks.sort_unstable_by_key(|(position, _)| (position.x, position.y, position.z));
+        chunks
+    }
+
+    pub(crate) fn has_unsaved_chunks(&self) -> bool {
+        self.chunks.values().any(Chunk::is_save_dirty)
+            || self.saved_overrides.values().any(Chunk::is_save_dirty)
+    }
+
+    /// Acknowledge only the exact snapshot that reached disk. Edits made while
+    /// the background job ran stay dirty for the next job.
+    pub(crate) fn acknowledge_saved(&mut self, snapshot: &[(ChunkPos, Vec<BlockId>)]) {
+        for (position, blocks) in snapshot {
+            if let Some(live) = self.chunks.get_mut(position)
+                && live.blocks() == blocks.as_slice()
+            {
+                live.mark_saved();
+            }
+            let matches_retained = self
+                .saved_overrides
+                .get(position)
+                .is_some_and(|chunk| chunk.blocks() == blocks.as_slice());
+            if matches_retained {
+                self.saved_overrides.get_mut(position).unwrap().mark_saved();
+            } else if self
+                .chunks
+                .get(position)
+                .is_some_and(|chunk| chunk.blocks() == blocks.as_slice())
+            {
+                let mut saved = self.chunks[position].clone();
+                saved.mark_saved();
+                self.saved_overrides.insert(*position, saved);
+            }
+        }
     }
 
     /// Reads a block through world coordinates, or returns `None` if its chunk is unloaded.
@@ -356,6 +480,22 @@ mod tests {
 
         assert_eq!(chunk.set_block(1, 2, 3, BlockId::DIRT), Ok(BlockId::DIRT));
         assert!(!chunk.is_dirty());
+    }
+
+    #[test]
+    fn mesh_revision_tracks_voxel_and_boundary_invalidations() {
+        let mut chunk = Chunk::new(BlockId::AIR);
+        let initial = chunk.mesh_revision();
+        chunk.mark_clean();
+
+        chunk.set_block(1, 1, 1, BlockId::AIR).unwrap();
+        assert_eq!(chunk.mesh_revision(), initial);
+
+        chunk.set_block(1, 1, 1, BlockId::STONE).unwrap();
+        assert_eq!(chunk.mesh_revision(), initial + 1);
+
+        chunk.mark_dirty();
+        assert_eq!(chunk.mesh_revision(), initial + 2);
     }
 
     #[test]
@@ -593,5 +733,44 @@ mod tests {
             assert!(storage.get_chunk(position).unwrap().is_dirty());
         }
         assert!(!storage.get_chunk(diagonal).unwrap().is_dirty());
+    }
+
+    #[test]
+    fn save_acknowledgement_never_clears_a_newer_edit() {
+        let position = ChunkPos::new(2, 0, -1);
+        let block = WorldBlockPos::new(32, 4, -16);
+        let mut storage = ChunkStorage::default();
+        storage.insert_chunk(position, Chunk::default());
+
+        storage.set_block(block, BlockId::STONE).unwrap();
+        let first_snapshot = storage.save_snapshot();
+        storage.set_block(block, BlockId::DIRT).unwrap();
+        storage.acknowledge_saved(&first_snapshot);
+
+        assert!(storage.get_chunk(position).unwrap().is_save_dirty());
+        assert_eq!(storage.get_block(block), Some(BlockId::DIRT));
+
+        let latest_snapshot = storage.save_snapshot();
+        storage.acknowledge_saved(&latest_snapshot);
+        assert!(!storage.get_chunk(position).unwrap().is_save_dirty());
+
+        storage.remove_chunk(position);
+        storage.insert_chunk(position, Chunk::new(BlockId::AIR));
+        assert_eq!(storage.get_block(block), Some(BlockId::DIRT));
+    }
+
+    #[test]
+    fn dirty_chunk_survives_streaming_unload_until_saved() {
+        let position = ChunkPos::new(-3, 1, 4);
+        let block = WorldBlockPos::new(-48, 16, 64);
+        let mut storage = ChunkStorage::default();
+        storage.insert_chunk(position, Chunk::default());
+        storage.set_block(block, BlockId::WOOD).unwrap();
+        storage.remove_chunk(position);
+
+        let snapshot = storage.save_snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].0, position);
+        assert!(snapshot[0].1.contains(&BlockId::WOOD));
     }
 }

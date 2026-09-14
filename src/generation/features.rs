@@ -44,6 +44,33 @@ pub(super) fn generate_features_for_chunk(
     }
 }
 
+/// Returns the deterministic feature voxel at one world position, if any.
+///
+/// This uses the same candidate roots as chunk feature generation so callers
+/// such as spawn selection can reject trees before their chunks are loaded.
+pub(crate) fn feature_block_at(
+    seed: u64,
+    world_x: i64,
+    world_y: i64,
+    world_z: i64,
+) -> Option<BlockId> {
+    let generator = FeatureGenerator::new(seed, BiomeSampler::new(seed));
+
+    for root_z in (world_z - TREE_CANOPY_RADIUS)..=(world_z + TREE_CANOPY_RADIUS) {
+        for root_x in (world_x - TREE_CANOPY_RADIUS)..=(world_x + TREE_CANOPY_RADIUS) {
+            let Some(tree) = generator.tree_at(root_x, root_z) else {
+                continue;
+            };
+
+            if let Some(block) = tree.block_at(world_x, world_y, world_z) {
+                return Some(block);
+            }
+        }
+    }
+
+    None
+}
+
 #[derive(Clone, Copy, Debug)]
 struct FeatureGenerator {
     seed: u64,
