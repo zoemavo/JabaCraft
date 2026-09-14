@@ -144,7 +144,15 @@ Chunk CPU meshing runs on `AsyncComputeTaskPool` with a bounded number of jobs:
 owned 3x3x3 chunk snapshot and return mesh data; only the main world creates or
 updates Bevy mesh assets. Every voxel or visible-boundary change advances a
 mesh revision, so results computed from an older revision are discarded and
-queued again. Pending work is prioritized around the player's current chunk.
+queued again. Generation and meshing priorities favor nearby chunks first and
+then slightly favor chunks along the camera's yaw/pitch direction. Priorities
+are rebuilt every frame, so obsolete queued work cannot accumulate after fast
+movement. Jobs outside the current streaming window are cancelled.
+
+The default scheduler budgets are four generation tasks, four meshing tasks,
+two meshing task starts per frame and two completed chunk-mesh uploads per
+frame. Completed worker results count toward the meshing-task limit until the
+main world uploads them, bounding both CPU pressure and queued mesh memory.
 
 Merged quads carry block-local repeat coordinates in UV1. A StandardMaterial
 extension repeats the original half-texel-inset atlas tile instead of stretching

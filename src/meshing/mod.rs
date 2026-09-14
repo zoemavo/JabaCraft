@@ -17,20 +17,22 @@ use crate::{
 pub use renderer::{ChunkMesh, ChunkRenderer};
 
 use atlas::create_block_texture_atlas;
-use renderer::{ChunkMeshingTasks, sync_chunk_renderer};
+use renderer::{ChunkMeshingQueue, ChunkMeshingTasks, sync_chunk_renderer};
 
 /// Bounds worker pressure and task setup performed in one frame.
 #[derive(Debug, Resource)]
 pub struct MeshingSettings {
-    pub max_concurrent_jobs: usize,
+    pub max_meshing_tasks: usize,
     pub start_budget_per_frame: usize,
+    pub max_mesh_uploads_per_frame: usize,
 }
 
 impl Default for MeshingSettings {
     fn default() -> Self {
         Self {
-            max_concurrent_jobs: 4,
+            max_meshing_tasks: 4,
             start_budget_per_frame: 2,
+            max_mesh_uploads_per_frame: 2,
         }
     }
 }
@@ -45,6 +47,7 @@ impl Plugin for ChunkMeshingPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<VoxelMaterial>::default())
             .init_resource::<MeshingSettings>()
+            .init_resource::<ChunkMeshingQueue>()
             .init_resource::<ChunkMeshingTasks>()
             .init_resource::<ChunkRenderer>()
             .add_systems(Startup, create_chunk_material)
@@ -59,6 +62,7 @@ impl Plugin for ChunkMeshingPlugin {
 }
 
 pub(crate) fn reset_session(world: &mut World) {
+    world.insert_resource(ChunkMeshingQueue::default());
     world.insert_resource(ChunkMeshingTasks::default());
 }
 

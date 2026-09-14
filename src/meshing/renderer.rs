@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap, HashSet},
+};
 
 use bevy::{
     light::NotShadowCaster,
@@ -10,8 +13,10 @@ use crate::{
     block::BlockRegistry,
     chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, ChunkStorage},
     coordinates::ChunkPos,
-    generation::{ChunkGenerationQueue, ChunkLifecycle, GenerationSettings},
-    player::Player,
+    generation::{
+        ChunkGenerationQueue, ChunkLifecycle, ChunkPriority, GenerationSettings, chunk_priority,
+    },
+    player::{LookState, Player},
 };
 
 use super::{
@@ -57,7 +62,41 @@ struct MeshingResult {
 /// access ECS resources or Bevy asset collections.
 #[derive(Default, Resource)]
 pub(super) struct ChunkMeshingTasks {
-    running: HashMap<ChunkPos, Task<MeshingResult>>,
+    running: HashMap<ChunkPos, MeshingJob>,
+    completed: HashMap<ChunkPos, MeshingResult>,
+}
+
+struct MeshingJob {
+    revision: u64,
+    seed: u64,
+    task: Task<MeshingResult>,
+}
+
+#[derive(Default, Resource)]
+pub(super) struct ChunkMeshingQueue {
+    pending: BinaryHeap<Reverse<ChunkPriority>>,
+}
+
+impl ChunkMeshingQueue {
+    fn reprioritize(
+        &mut self,
+        positions: impl IntoIterator<Item = ChunkPos>,
+        center: ChunkPos,
+        view_forward: Vec3,
+    ) {
+        self.pending.clear();
+        self.pending.extend(
+            positions
+                .into_iter()
+                .map(|position| Reverse(chunk_priority(position, center, view_forward))),
+        );
+    }
+
+    fn pop(&mut self) -> Option<ChunkPos> {
+        self.pending
+            .pop()
+            .map(|Reverse((_, _, _, position))| position)
+    }
 }
 
 impl ChunkRenderer {
@@ -115,11 +154,38 @@ pub(super) fn sync_chunk_renderer(
     mut renderer: ResMut<ChunkRenderer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut tasks: ResMut<ChunkMeshingTasks>,
-    players: Query<&Transform, With<Player>>,
+    mut priority_queue: ResMut<ChunkMeshingQueue>,
+    players: Query<(&Transform, &LookState), With<Player>>,
 ) {
-    despawn_unloaded_chunks(&mut commands, &storage, &mut renderer, &mut meshes);
+    let (center, view_forward) = players
+        .single()
+        .map(|(transform, look)| {
+            (
+                chunk_position_from_translation(transform.translation),
+                Quat::from_rotation_y(look.yaw) * Quat::from_rotation_x(look.pitch) * Vec3::NEG_Z,
+            )
+        })
+        .unwrap_or((ChunkPos::default(), Vec3::NEG_Z));
 
-    for result in take_completed_tasks(&mut tasks) {
+    despawn_unloaded_chunks(&mut commands, &storage, &mut renderer, &mut meshes);
+    cancel_obsolete_meshing(
+        &mut tasks,
+        &storage,
+        &mut generation_queue,
+        generation_settings.seed,
+    );
+    collect_completed_tasks(&mut tasks);
+
+    let mut completed = tasks.completed.keys().copied().collect::<Vec<_>>();
+    completed.sort_unstable_by_key(|position| chunk_priority(*position, center, view_forward));
+    for position in completed
+        .into_iter()
+        .take(settings.max_mesh_uploads_per_frame)
+    {
+        let result = tasks
+            .completed
+            .remove(&position)
+            .expect("completed position came from the result map");
         apply_meshing_result(
             result,
             &mut commands,
@@ -132,7 +198,7 @@ pub(super) fn sync_chunk_renderer(
         );
     }
 
-    let mut pending = storage
+    let pending = storage
         .iter()
         .filter_map(|(position, chunk)| {
             let can_mesh = matches!(
@@ -145,19 +211,18 @@ pub(super) fn sync_chunk_renderer(
             .then_some(position)
         })
         .collect::<Vec<_>>();
-    let center = players
-        .single()
-        .map(|transform| chunk_position_from_translation(transform.translation))
-        .unwrap_or_default();
-    pending.sort_unstable_by_key(|position| distance_squared(*position, center));
+    priority_queue.reprioritize(pending, center, view_forward);
 
     let available_slots = settings
-        .max_concurrent_jobs
-        .saturating_sub(tasks.running.len());
+        .max_meshing_tasks
+        .saturating_sub(tasks.running.len() + tasks.completed.len());
     let start_count = available_slots.min(settings.start_budget_per_frame);
     let pool = AsyncComputeTaskPool::get();
 
-    for position in pending.into_iter().take(start_count) {
+    for _ in 0..start_count {
+        let Some(position) = priority_queue.pop() else {
+            break;
+        };
         if !generation_queue.begin_meshing(position) {
             continue;
         }
@@ -176,7 +241,14 @@ pub(super) fn sync_chunk_renderer(
                 meshes: build_chunk_mesh(position, &snapshot, &registry, seed),
             }
         });
-        let previous = tasks.running.insert(position, task);
+        let previous = tasks.running.insert(
+            position,
+            MeshingJob {
+                revision,
+                seed,
+                task,
+            },
+        );
         debug_assert!(
             previous.is_none(),
             "a chunk must have at most one mesh task"
@@ -184,16 +256,65 @@ pub(super) fn sync_chunk_renderer(
     }
 }
 
-fn take_completed_tasks(tasks: &mut ChunkMeshingTasks) -> Vec<MeshingResult> {
+fn collect_completed_tasks(tasks: &mut ChunkMeshingTasks) {
     let completed = tasks
         .running
-        .values_mut()
-        .filter_map(check_ready)
+        .iter_mut()
+        .filter_map(|(&position, job)| check_ready(&mut job.task).map(|result| (position, result)))
         .collect::<Vec<_>>();
-    for result in &completed {
-        tasks.running.remove(&result.position);
+    for (position, result) in completed {
+        tasks.running.remove(&position);
+        let previous = tasks.completed.insert(position, result);
+        debug_assert!(previous.is_none(), "a chunk has one completed mesh result");
     }
-    completed
+}
+
+fn cancel_obsolete_meshing(
+    tasks: &mut ChunkMeshingTasks,
+    storage: &ChunkStorage,
+    queue: &mut ChunkGenerationQueue,
+    seed: u64,
+) {
+    let mut obsolete = tasks
+        .running
+        .iter()
+        .filter_map(|(&position, job)| {
+            (!meshing_job_is_current(position, job.revision, job.seed, storage, queue, seed))
+                .then_some(position)
+        })
+        .collect::<HashSet<_>>();
+    obsolete.extend(tasks.completed.iter().filter_map(|(&position, result)| {
+        (!meshing_job_is_current(position, result.revision, result.seed, storage, queue, seed))
+            .then_some(position)
+    }));
+
+    for position in obsolete {
+        tasks.running.remove(&position);
+        tasks.completed.remove(&position);
+        if queue.state(position) == Some(ChunkLifecycle::Meshing) {
+            if storage.contains_chunk(position) {
+                let transitioned = queue.retry_meshing(position);
+                debug_assert!(transitioned, "cancelled mesh must return to Generated");
+            } else {
+                queue.cancel(position);
+            }
+        }
+    }
+}
+
+fn meshing_job_is_current(
+    position: ChunkPos,
+    revision: u64,
+    job_seed: u64,
+    storage: &ChunkStorage,
+    queue: &ChunkGenerationQueue,
+    current_seed: u64,
+) -> bool {
+    job_seed == current_seed
+        && queue.state(position) == Some(ChunkLifecycle::Meshing)
+        && storage
+            .get_chunk(position)
+            .is_some_and(|chunk| chunk.mesh_revision() == revision)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -390,13 +511,6 @@ fn chunk_position_from_translation(translation: Vec3) -> ChunkPos {
     )
 }
 
-fn distance_squared(position: ChunkPos, center: ChunkPos) -> i64 {
-    let dx = i64::from(position.x) - i64::from(center.x);
-    let dy = i64::from(position.y) - i64::from(center.y);
-    let dz = i64::from(position.z) - i64::from(center.z);
-    dx * dx + dy * dy + dz * dz
-}
-
 #[cfg(test)]
 mod tests {
     use crate::{block::BlockId, chunk::Chunk, coordinates::WorldBlockPos};
@@ -409,13 +523,15 @@ mod tests {
             .init_resource::<Assets<Mesh>>()
             .init_resource::<ChunkStorage>()
             .init_resource::<ChunkGenerationQueue>()
+            .init_resource::<ChunkMeshingQueue>()
             .init_resource::<ChunkMeshingTasks>()
             .init_resource::<ChunkRenderer>()
             .insert_resource(BlockRegistry::default())
             .insert_resource(GenerationSettings::default())
             .insert_resource(MeshingSettings {
-                max_concurrent_jobs: usize::MAX,
+                max_meshing_tasks: usize::MAX,
                 start_budget_per_frame: usize::MAX,
+                max_mesh_uploads_per_frame: usize::MAX,
             })
             .insert_resource(ChunkMaterial(Handle::default(), Handle::default()))
             .add_systems(Update, sync_chunk_renderer);
@@ -425,11 +541,10 @@ mod tests {
     fn finish_meshing(app: &mut App) {
         for _ in 0..10_000 {
             app.update();
-            let no_tasks = app
-                .world()
-                .resource::<ChunkMeshingTasks>()
-                .running
-                .is_empty();
+            let no_tasks = {
+                let tasks = app.world().resource::<ChunkMeshingTasks>();
+                tasks.running.is_empty() && tasks.completed.is_empty()
+            };
             let all_loaded_ready = {
                 let storage = app.world().resource::<ChunkStorage>();
                 let queue = app.world().resource::<ChunkGenerationQueue>();
@@ -709,7 +824,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_worker_result_is_discarded_and_remeshed_at_latest_revision() {
+    fn stale_worker_job_is_cancelled_and_remeshed_at_latest_revision() {
         let mut app = renderer_test_app();
         let position = ChunkPos::default();
         insert_chunk(&mut app, position, BlockId::STONE);
@@ -738,6 +853,77 @@ mod tests {
                 .resource::<ChunkGenerationQueue>()
                 .state(position),
             Some(ChunkLifecycle::Ready)
+        );
+    }
+
+    #[test]
+    fn meshing_priority_prefers_near_then_forward_chunks() {
+        let center = ChunkPos::default();
+        let near_behind = ChunkPos::new(0, 0, 1);
+        let ahead = ChunkPos::new(0, 0, -2);
+        let behind = ChunkPos::new(0, 0, 2);
+        let mut queue = ChunkMeshingQueue::default();
+        queue.reprioritize([behind, ahead, near_behind], center, Vec3::NEG_Z);
+
+        assert_eq!(queue.pop(), Some(near_behind));
+        assert_eq!(queue.pop(), Some(ahead));
+        assert_eq!(queue.pop(), Some(behind));
+        assert_eq!(queue.pop(), None);
+    }
+
+    #[test]
+    fn mesh_upload_budget_limits_ready_chunks_applied_per_frame() {
+        let mut app = renderer_test_app();
+        *app.world_mut().resource_mut::<MeshingSettings>() = MeshingSettings {
+            max_meshing_tasks: 3,
+            start_budget_per_frame: 3,
+            max_mesh_uploads_per_frame: 1,
+        };
+        for x in 0..3 {
+            insert_chunk(&mut app, ChunkPos::new(x, 0, 0), BlockId::STONE);
+        }
+
+        for _ in 0..10_000 {
+            let before = app.world().resource::<ChunkRenderer>().len();
+            app.update();
+            let after = app.world().resource::<ChunkRenderer>().len();
+            assert!(after.saturating_sub(before) <= 1);
+            let tasks = app.world().resource::<ChunkMeshingTasks>();
+            assert!(tasks.running.len() + tasks.completed.len() <= 3);
+            if after == 3 && tasks.running.is_empty() && tasks.completed.is_empty() {
+                return;
+            }
+            std::thread::yield_now();
+        }
+        panic!("upload-budget test did not finish");
+    }
+
+    #[test]
+    fn unloading_cancels_an_inflight_meshing_job() {
+        let mut app = renderer_test_app();
+        let position = ChunkPos::default();
+        insert_chunk(&mut app, position, BlockId::STONE);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<ChunkMeshingTasks>()
+                .running
+                .contains_key(&position)
+        );
+
+        app.world_mut()
+            .resource_mut::<ChunkStorage>()
+            .remove_chunk(position);
+        app.update();
+
+        let tasks = app.world().resource::<ChunkMeshingTasks>();
+        assert!(!tasks.running.contains_key(&position));
+        assert!(!tasks.completed.contains_key(&position));
+        assert_eq!(
+            app.world()
+                .resource::<ChunkGenerationQueue>()
+                .state(position),
+            None
         );
     }
 }

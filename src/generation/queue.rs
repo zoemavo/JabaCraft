@@ -21,7 +21,7 @@ pub enum ChunkLifecycle {
 #[derive(Debug, Default, Resource)]
 pub struct ChunkGenerationQueue {
     states: HashMap<ChunkPos, ChunkLifecycle>,
-    pending: BinaryHeap<Reverse<(i64, i64, ChunkPos)>>,
+    pending: BinaryHeap<Reverse<ChunkPriority>>,
 }
 
 impl ChunkGenerationQueue {
@@ -72,17 +72,18 @@ impl ChunkGenerationQueue {
         }
     }
 
-    pub(crate) fn reprioritize(&mut self, center: ChunkPos) {
+    pub(crate) fn reprioritize(&mut self, center: ChunkPos, view_forward: Vec3) {
         self.pending.clear();
         for (&position, &state) in &self.states {
             if state == ChunkLifecycle::Requested {
-                self.pending.push(Reverse(priority(position, center)));
+                self.pending
+                    .push(Reverse(chunk_priority(position, center, view_forward)));
             }
         }
     }
 
     pub(crate) fn take_next_generation(&mut self) -> Option<ChunkPos> {
-        while let Some(Reverse((_, _, position))) = self.pending.pop() {
+        while let Some(Reverse((_, _, _, position))) = self.pending.pop() {
             if self.transition(
                 position,
                 &[ChunkLifecycle::Requested],
@@ -139,12 +140,26 @@ impl ChunkGenerationQueue {
     }
 }
 
-fn priority(position: ChunkPos, center: ChunkPos) -> (i64, i64, ChunkPos) {
+pub(crate) type ChunkPriority = (i64, i64, i64, ChunkPos);
+
+/// Distance dominates this score. View direction only biases chunks within
+/// nearby distance bands, so looking around cannot starve adjacent terrain.
+pub(crate) fn chunk_priority(
+    position: ChunkPos,
+    center: ChunkPos,
+    view_forward: Vec3,
+) -> ChunkPriority {
     let dx = i64::from(position.x) - i64::from(center.x);
     let dy = i64::from(position.y) - i64::from(center.y);
     let dz = i64::from(position.z) - i64::from(center.z);
     let horizontal_squared = dx * dx + dz * dz;
-    (horizontal_squared + dy * dy, horizontal_squared, position)
+    let distance_squared = horizontal_squared + dy * dy;
+    let forward = view_forward.normalize_or(Vec3::NEG_Z);
+    let forward_projection = dx * (forward.x * 1024.0).round() as i64
+        + dy * (forward.y * 1024.0).round() as i64
+        + dz * (forward.z * 1024.0).round() as i64;
+    let score = distance_squared * 1024 - forward_projection * 3 / 8;
+    (score, distance_squared, -forward_projection, position)
 }
 
 #[cfg(test)]
@@ -161,7 +176,7 @@ mod tests {
         assert_eq!(queue.tracked_count(), 1);
         assert_eq!(queue.pending_count(), 1);
 
-        queue.reprioritize(ChunkPos::default());
+        queue.reprioritize(ChunkPos::default(), Vec3::NEG_Z);
         assert_eq!(queue.take_next_generation(), Some(position));
         assert_eq!(queue.take_next_generation(), None);
     }
@@ -173,7 +188,7 @@ mod tests {
         queue.request(position);
 
         assert!(!queue.finish_generation(position));
-        queue.reprioritize(position);
+        queue.reprioritize(position, Vec3::NEG_Z);
         assert_eq!(queue.take_next_generation(), Some(position));
         assert_eq!(queue.state(position), Some(ChunkLifecycle::Generating));
         assert!(queue.finish_generation(position));
@@ -196,10 +211,27 @@ mod tests {
         let mut queue = ChunkGenerationQueue::default();
         queue.request(far);
         queue.request(near);
-        queue.reprioritize(center);
+        queue.reprioritize(center, Vec3::NEG_Z);
 
         assert_eq!(queue.take_next_generation(), Some(near));
         assert!(queue.finish_generation(near));
         assert_eq!(queue.take_next_generation(), Some(far));
+    }
+
+    #[test]
+    fn view_direction_breaks_distance_ties_without_starving_near_chunks() {
+        let center = ChunkPos::default();
+        let ahead = ChunkPos::new(0, 0, -2);
+        let behind = ChunkPos::new(0, 0, 2);
+        assert!(
+            chunk_priority(ahead, center, Vec3::NEG_Z)
+                < chunk_priority(behind, center, Vec3::NEG_Z)
+        );
+
+        let near_behind = ChunkPos::new(0, 0, 1);
+        assert!(
+            chunk_priority(near_behind, center, Vec3::NEG_Z)
+                < chunk_priority(ahead, center, Vec3::NEG_Z)
+        );
     }
 }

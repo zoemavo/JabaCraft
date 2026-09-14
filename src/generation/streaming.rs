@@ -8,7 +8,7 @@ use bevy::{
 use crate::{
     chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk, ChunkStorage},
     coordinates::ChunkPos,
-    player::Player,
+    player::{LookState, Player},
 };
 
 use super::{
@@ -38,20 +38,22 @@ pub(super) struct ChunkGenerationTasks {
 }
 
 pub(super) fn stream_chunks_around_player(
-    players: Query<&Transform, With<Player>>,
+    players: Query<(&Transform, &LookState), With<Player>>,
     settings: Res<GenerationSettings>,
     cave_settings: Res<CaveSettings>,
     mut queue: ResMut<ChunkGenerationQueue>,
     mut tasks: ResMut<ChunkGenerationTasks>,
     mut storage: ResMut<ChunkStorage>,
 ) {
-    let Ok(player_transform) = players.single() else {
+    let Ok((player_transform, look)) = players.single() else {
         return;
     };
 
     let center = chunk_position_from_translation(player_transform.translation);
+    let view_forward =
+        Quat::from_rotation_y(look.yaw) * Quat::from_rotation_x(look.pitch) * Vec3::NEG_Z;
     let required = required_chunk_positions(center, &settings);
-    let mut update = update_requests(&mut storage, &mut queue, &tasks, &required);
+    let mut update = update_requests(&mut storage, &mut queue, &mut tasks, &required);
 
     for result in take_completed_tasks(&mut tasks) {
         if apply_generation_result(
@@ -68,9 +70,9 @@ pub(super) fn stream_chunks_around_player(
         }
     }
 
-    queue.reprioritize(center);
+    queue.reprioritize(center, view_forward);
     let available_slots = settings
-        .max_concurrent_generation_jobs
+        .max_generation_tasks
         .saturating_sub(tasks.running.len());
     let pool = AsyncComputeTaskPool::get();
 
@@ -91,7 +93,7 @@ pub(super) fn stream_chunks_around_player(
 
     if update.has_activity() {
         debug!(
-            "Chunk streaming at ({}, {}, {}): requested {}, started {}, applied {}, discarded {}, unloaded {}, pending {}, running {}, stored {}",
+            "Chunk streaming at ({}, {}, {}): requested {}, started {}, applied {}, discarded {}, cancelled {}, unloaded {}, pending {}, running {}, stored {}",
             center.x,
             center.y,
             center.z,
@@ -99,6 +101,7 @@ pub(super) fn stream_chunks_around_player(
             update.started,
             update.applied,
             update.discarded,
+            update.cancelled,
             update.unloaded,
             queue.pending_count(),
             tasks.running.len(),
@@ -167,6 +170,7 @@ struct StreamingUpdate {
     applied: usize,
     discarded: usize,
     unloaded: usize,
+    cancelled: usize,
 }
 
 impl StreamingUpdate {
@@ -178,12 +182,13 @@ impl StreamingUpdate {
 fn update_requests(
     storage: &mut ChunkStorage,
     queue: &mut ChunkGenerationQueue,
-    tasks: &ChunkGenerationTasks,
+    tasks: &mut ChunkGenerationTasks,
     required: &HashSet<ChunkPos>,
 ) -> StreamingUpdate {
     let tracked = queue
         .positions()
         .chain(storage.iter().map(|(position, _)| position))
+        .chain(tasks.running.keys().copied())
         .collect::<HashSet<_>>();
     let mut update = StreamingUpdate::default();
 
@@ -192,11 +197,10 @@ fn update_requests(
             continue;
         }
 
-        // Keep an in-flight state until its worker finishes. This prevents a
-        // second task if the player leaves and quickly re-enters the area.
-        if queue.state(position) != Some(ChunkLifecycle::Generating) {
-            queue.cancel(position);
+        if tasks.running.remove(&position).is_some() {
+            update.cancelled += 1;
         }
+        queue.cancel(position);
         if storage.remove_chunk(position).is_some() {
             update.unloaded += 1;
         }
@@ -289,13 +293,13 @@ mod tests {
             render_distance_chunks: radius,
             world_min_y,
             world_max_y,
-            max_concurrent_generation_jobs: concurrent,
+            max_generation_tasks: concurrent,
         }
     }
 
     fn begin_generation(queue: &mut ChunkGenerationQueue, position: ChunkPos) {
         assert!(queue.request(position));
-        queue.reprioritize(position);
+        queue.reprioritize(position, Vec3::NEG_Z);
         assert_eq!(queue.take_next_generation(), Some(position));
     }
 
@@ -318,7 +322,7 @@ mod tests {
         let required = required_chunk_positions(center, &settings);
 
         assert_eq!(settings.render_distance_chunks, 8);
-        assert_eq!(settings.max_concurrent_generation_jobs, 4);
+        assert_eq!(settings.max_generation_tasks, 4);
         assert_eq!(settings.world_min_y, -64);
         assert_eq!(settings.world_max_y, 192);
         assert_eq!(required.len(), 197 * 16);
@@ -506,17 +510,31 @@ mod tests {
     }
 
     #[test]
-    fn leaving_window_preserves_generating_state_for_inflight_result() {
+    fn leaving_window_cancels_obsolete_generation_state() {
         let position = ChunkPos::new(5, 0, 5);
         let required = HashSet::new();
         let mut storage = ChunkStorage::default();
         let mut queue = ChunkGenerationQueue::default();
-        let tasks = ChunkGenerationTasks::default();
+        let mut tasks = ChunkGenerationTasks::default();
         begin_generation(&mut queue, position);
+        let pool = bevy::tasks::TaskPool::new();
+        tasks.running.insert(
+            position,
+            pool.spawn(async move {
+                GeneratedChunk {
+                    position,
+                    seed: 42,
+                    cave_settings: CaveSettings::default(),
+                    chunk: Chunk::default(),
+                }
+            }),
+        );
 
-        update_requests(&mut storage, &mut queue, &tasks, &required);
+        let update = update_requests(&mut storage, &mut queue, &mut tasks, &required);
 
-        assert_eq!(queue.state(position), Some(ChunkLifecycle::Generating));
-        assert_eq!(queue.generating_count(), 1);
+        assert_eq!(queue.state(position), None);
+        assert_eq!(queue.generating_count(), 0);
+        assert!(tasks.running.is_empty());
+        assert_eq!(update.cancelled, 1);
     }
 }

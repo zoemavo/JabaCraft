@@ -18,6 +18,7 @@ pub use biome::{Biome, BiomeDefinition, BiomeSample, BiomeSampler};
 pub use cave::CaveSettings;
 pub(crate) use features::feature_block_at;
 pub use queue::{ChunkGenerationQueue, ChunkLifecycle};
+pub(crate) use queue::{ChunkPriority, chunk_priority};
 pub use terrain::{SEA_LEVEL, is_chunk_potentially_empty, terrain_height_at};
 
 pub const DEFAULT_WORLD_MIN_Y: i32 = -64;
@@ -34,7 +35,7 @@ pub struct GenerationSettings {
     /// Exclusive upper world-block boundary.
     pub world_max_y: i32,
     /// Maximum number of terrain tasks running concurrently in the compute pool.
-    pub max_concurrent_generation_jobs: usize,
+    pub max_generation_tasks: usize,
 }
 
 impl Default for GenerationSettings {
@@ -44,7 +45,7 @@ impl Default for GenerationSettings {
             render_distance_chunks: 8,
             world_min_y: DEFAULT_WORLD_MIN_Y,
             world_max_y: DEFAULT_WORLD_MAX_Y,
-            max_concurrent_generation_jobs: 4,
+            max_generation_tasks: 4,
         }
     }
 }
