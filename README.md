@@ -167,9 +167,12 @@ main world uploads them, bounding both CPU pressure and queued mesh memory.
 
 Merged quads carry block-local repeat coordinates in UV1. A StandardMaterial
 extension repeats the original half-texel-inset atlas tile instead of stretching
-it; UV0 and all original unit faces stay unchanged. PBR lighting, fog and shadows
-remain enabled. Opaque atlas tiles are verified to have full alpha, so the stock
-alpha prepass also remains valid.
+it; UV0 and all original unit faces stay unchanged. The runtime atlas gives each
+Faithful tile a replicated gutter and independently generated mip levels. Linear
+minification removes distant colored moire while nearest magnification keeps the
+pixel-art look nearby, without bleeding adjacent materials together. PBR
+lighting, fog and shadows remain enabled. Opaque atlas tiles are verified to
+have full alpha, so the stock alpha prepass also remains valid.
 
 The old mesher is retained only under `cfg(test)` as a comparison reference.
 Run `cargo test greedy_benchmark -- --ignored --nocapture` for vertex/index counts

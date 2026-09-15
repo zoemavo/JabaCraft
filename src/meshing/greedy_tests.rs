@@ -144,6 +144,8 @@ fn slabs_and_solid_chunks_reduce_geometry_and_chunk_seams_stay_culled() {
 
 #[test]
 fn repeating_atlas_coordinates_match_old_unit_faces_on_every_axis() {
+    use super::super::atlas::{ATLAS_CELL_SIZE, ATLAS_WIDTH, TILE_GUTTER, TILE_SIZE};
+
     for face in FACES {
         for texture in 1..16 {
             let mut mesh = ChunkMeshBuffers::default();
@@ -166,8 +168,11 @@ fn repeating_atlas_coordinates_match_old_unit_faces_on_every_axis() {
                     };
                     let atlas = interpolate(&mesh.uvs, s, t);
                     let repeat = interpolate(&mesh.repeats, s, t);
-                    let shader =
-                        ((atlas * 4.0).floor() * 32.0 + 0.5 + repeat.fract() * 31.0) / 128.0;
+                    let shader = ((atlas * 4.0).floor() * ATLAS_CELL_SIZE as f32
+                        + TILE_GUTTER as f32
+                        + 0.5
+                        + repeat.fract() * (TILE_SIZE - 1) as f32)
+                        / ATLAS_WIDTH as f32;
                     let expected =
                         interpolate(&uv, (s * length(1)).fract(), (t * length(3)).fract());
                     assert!(
@@ -183,6 +188,8 @@ fn repeating_atlas_coordinates_match_old_unit_faces_on_every_axis() {
 
 #[test]
 fn merged_opaque_tiles_are_opaque_in_the_shadow_prepass() {
+    use super::super::atlas::{ATLAS_CELL_SIZE, ATLAS_WIDTH, TILE_GUTTER, TILE_SIZE};
+
     let registry = BlockRegistry::default();
     let image = super::super::atlas::create_block_texture_atlas();
     let data = image.data.as_ref().unwrap();
@@ -192,10 +199,14 @@ fn merged_opaque_tiles_are_opaque_in_the_shadow_prepass() {
         }
         for face in FACES {
             let tile = registry.texture_for(block, face.block_face) as usize;
-            for y in 0..32 {
-                for x in 0..32 {
+            for y in 0..TILE_SIZE as usize {
+                for x in 0..TILE_SIZE as usize {
+                    let tile_x = tile % 4;
+                    let tile_y = tile / 4;
+                    let atlas_x = tile_x * ATLAS_CELL_SIZE as usize + TILE_GUTTER as usize + x;
+                    let atlas_y = tile_y * ATLAS_CELL_SIZE as usize + TILE_GUTTER as usize + y;
                     assert_eq!(
-                        data[((tile / 4 * 32 + y) * 128 + tile % 4 * 32 + x) * 4 + 3],
+                        data[(atlas_y * ATLAS_WIDTH as usize + atlas_x) * 4 + 3],
                         255
                     );
                 }

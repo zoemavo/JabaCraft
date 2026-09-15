@@ -56,7 +56,9 @@ fn fragment(
     // or (-1,-1) for legacy unit faces (including all cutout foliage).
     if in.uv_b.x >= 0.0 {
         let tile = floor(in.uv * 4.0);
-        in.uv = (tile * 32.0 + vec2<f32>(0.5) + fract(in.uv_b) * 31.0) / 128.0;
+        // Every 32px source tile lives in a 64px cell with a 16px replicated
+        // gutter. The gutters keep filtered mip samples inside this material.
+        in.uv = (tile * 64.0 + vec2<f32>(16.5) + fract(in.uv_b) * 31.0) / 256.0;
     }
 #endif
 
