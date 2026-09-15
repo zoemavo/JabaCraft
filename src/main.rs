@@ -2,6 +2,7 @@ use bevy::{prelude::*, window::PresentMode};
 use rustcraft::{
     app::{APP_TITLE, AppPlugin},
     crafting::CraftingPlugin,
+    debug::DebugPlugin,
     game::GamePlugin,
     game_time::GameTimePlugin,
     interaction::InteractionPlugin,
@@ -34,6 +35,7 @@ fn main() {
         .add_plugins((
             AppPlugin,
             GamePlugin,
+            DebugPlugin,
             GameTimePlugin,
             PlayerPlugin,
             WorldPlugin,

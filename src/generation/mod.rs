@@ -38,6 +38,13 @@ pub struct GenerationSettings {
     pub max_generation_tasks: usize,
 }
 
+/// Read-only queue counters consumed by the F3 diagnostics overlay.
+#[derive(Clone, Copy, Debug, Default, Resource)]
+pub struct ChunkStreamingStats {
+    pub queued: usize,
+    pub running: usize,
+}
+
 impl Default for GenerationSettings {
     fn default() -> Self {
         Self {
@@ -63,6 +70,7 @@ impl Plugin for GenerationPlugin {
             .init_resource::<CaveSettings>()
             .init_resource::<ChunkGenerationQueue>()
             .init_resource::<ChunkGenerationTasks>()
+            .init_resource::<ChunkStreamingStats>()
             .add_systems(
                 Update,
                 stream_chunks_around_player.in_set(ChunkStreamingSet),
@@ -73,4 +81,5 @@ impl Plugin for GenerationPlugin {
 pub(crate) fn reset_session(world: &mut World) {
     world.insert_resource(ChunkGenerationQueue::default());
     world.insert_resource(ChunkGenerationTasks::default());
+    world.insert_resource(ChunkStreamingStats::default());
 }

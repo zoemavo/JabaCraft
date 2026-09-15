@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, Instant},
+};
 
 use bevy::{
     prelude::*,
@@ -8,11 +11,12 @@ use bevy::{
 use crate::{
     chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk, ChunkStorage},
     coordinates::ChunkPos,
+    debug::WorldProfiling,
     player::{LookState, Player},
 };
 
 use super::{
-    CaveSettings, ChunkGenerationQueue, ChunkLifecycle, GenerationSettings,
+    CaveSettings, ChunkGenerationQueue, ChunkLifecycle, ChunkStreamingStats, GenerationSettings,
     terrain::generate_terrain_chunk,
 };
 
@@ -29,6 +33,7 @@ struct GeneratedChunk {
     seed: u64,
     cave_settings: CaveSettings,
     chunk: Chunk,
+    generation_elapsed: Duration,
 }
 
 /// Owns task handles only; workers never receive this resource or access the ECS world.
@@ -44,6 +49,8 @@ pub(super) fn stream_chunks_around_player(
     mut queue: ResMut<ChunkGenerationQueue>,
     mut tasks: ResMut<ChunkGenerationTasks>,
     mut storage: ResMut<ChunkStorage>,
+    mut stats: ResMut<ChunkStreamingStats>,
+    mut profiling: Option<ResMut<WorldProfiling>>,
 ) {
     let Ok((player_transform, look)) = players.single() else {
         return;
@@ -56,6 +63,10 @@ pub(super) fn stream_chunks_around_player(
     let mut update = update_requests(&mut storage, &mut queue, &mut tasks, &required);
 
     for result in take_completed_tasks(&mut tasks) {
+        if let Some(profiling) = profiling.as_deref_mut() {
+            profiling.record_terrain_generation(result.generation_elapsed);
+        }
+        let load_started = Instant::now();
         if apply_generation_result(
             result,
             &required,
@@ -65,6 +76,9 @@ pub(super) fn stream_chunks_around_player(
             &mut queue,
         ) {
             update.applied += 1;
+            if let Some(profiling) = profiling.as_deref_mut() {
+                profiling.record_chunk_loading(load_started.elapsed());
+            }
         } else {
             update.discarded += 1;
         }
@@ -91,6 +105,9 @@ pub(super) fn stream_chunks_around_player(
         update.started += 1;
     }
 
+    stats.queued = queue.pending_count();
+    stats.running = tasks.running.len();
+
     if update.has_activity() {
         debug!(
             "Chunk streaming at ({}, {}, {}): requested {}, started {}, applied {}, discarded {}, cancelled {}, unloaded {}, pending {}, running {}, stored {}",
@@ -111,11 +128,14 @@ pub(super) fn stream_chunks_around_player(
 }
 
 fn generate_chunk(input: ChunkGenerationInput) -> GeneratedChunk {
+    let started = Instant::now();
+    let chunk = generate_terrain_chunk(input.position, input.seed, input.cave_settings);
     GeneratedChunk {
         position: input.position,
         seed: input.seed,
         cave_settings: input.cave_settings,
-        chunk: generate_terrain_chunk(input.position, input.seed, input.cave_settings),
+        chunk,
+        generation_elapsed: started.elapsed(),
     }
 }
 
@@ -526,6 +546,7 @@ mod tests {
                     seed: 42,
                     cave_settings: CaveSettings::default(),
                     chunk: Chunk::default(),
+                    generation_elapsed: Duration::ZERO,
                 }
             }),
         );

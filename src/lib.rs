@@ -5,6 +5,7 @@ pub mod block;
 pub mod chunk;
 pub mod coordinates;
 pub mod crafting;
+pub mod debug;
 pub mod game;
 pub mod game_time;
 pub mod generation;

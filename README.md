@@ -47,6 +47,16 @@ across all chunk boundaries, while solid shore faces remain visible through
 the water. Both layers are rebuilt and released with the chunk lifecycle.
 Transparency uses Bevy's normal mesh sorting, not per-triangle sorting or OIT.
 
+## Debug overlay
+
+Press `F3` while playing to toggle the debug overlay. It reports FPS and frame
+time, player/chunk coordinates, view direction, biome and targeted block, loaded
+and visible chunk counts, generation/meshing queue pressure, mesh geometry, and
+estimated CPU memory held by voxels and mesh buffers. It also shows cumulative
+average/last/maximum CPU timings for terrain generation, worker meshing, and
+main-world chunk loading. Expensive overlay counters refresh four times per
+second, and the UI entity and frame sampler are absent while the overlay is off.
+
 ## Main menu
 
 The game starts in MainMenu, with Play, Create World and Quit. Play lists save

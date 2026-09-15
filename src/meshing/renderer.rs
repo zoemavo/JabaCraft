@@ -1,6 +1,7 @@
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
+    time::{Duration, Instant},
 };
 
 use bevy::{
@@ -13,6 +14,7 @@ use crate::{
     block::BlockRegistry,
     chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, ChunkStorage},
     coordinates::ChunkPos,
+    debug::WorldProfiling,
     generation::{
         ChunkGenerationQueue, ChunkLifecycle, ChunkPriority, GenerationSettings, chunk_priority,
     },
@@ -20,7 +22,7 @@ use crate::{
 };
 
 use super::{
-    ChunkMaterial, MeshingSettings,
+    ChunkMaterial, ChunkMeshingStats, MeshingSettings,
     voxel::{ChunkMeshes, build_chunk_mesh},
 };
 
@@ -56,6 +58,7 @@ struct MeshingResult {
     revision: u64,
     seed: u64,
     meshes: ChunkMeshes,
+    meshing_elapsed: Duration,
 }
 
 /// Owns worker handles. Workers receive immutable owned snapshots and never
@@ -96,6 +99,10 @@ impl ChunkMeshingQueue {
         self.pending
             .pop()
             .map(|Reverse((_, _, _, position))| position)
+    }
+
+    fn len(&self) -> usize {
+        self.pending.len()
     }
 }
 
@@ -140,6 +147,22 @@ impl ChunkRenderer {
     pub fn is_empty(&self) -> bool {
         self.rendered.is_empty()
     }
+
+    /// Total indexed geometry retained in main-world mesh assets.
+    pub fn geometry_counts(&self, meshes: &Assets<Mesh>) -> (usize, usize) {
+        self.rendered.values().fold((0, 0), |totals, chunk| {
+            [&chunk.opaque, &chunk.water]
+                .into_iter()
+                .filter_map(|part| part.mesh.as_ref())
+                .filter_map(|handle| meshes.get(handle))
+                .fold(totals, |(vertices, indices), mesh| {
+                    (
+                        vertices + mesh.count_vertices(),
+                        indices + mesh.indices().map_or(0, |indices| indices.len()),
+                    )
+                })
+        })
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -156,6 +179,8 @@ pub(super) fn sync_chunk_renderer(
     mut tasks: ResMut<ChunkMeshingTasks>,
     mut priority_queue: ResMut<ChunkMeshingQueue>,
     players: Query<(&Transform, &LookState), With<Player>>,
+    mut stats: ResMut<ChunkMeshingStats>,
+    mut profiling: Option<ResMut<WorldProfiling>>,
 ) {
     let (center, view_forward) = players
         .single()
@@ -174,7 +199,7 @@ pub(super) fn sync_chunk_renderer(
         &mut generation_queue,
         generation_settings.seed,
     );
-    collect_completed_tasks(&mut tasks);
+    collect_completed_tasks(&mut tasks, profiling.as_deref_mut());
 
     let mut completed = tasks.completed.keys().copied().collect::<Vec<_>>();
     completed.sort_unstable_by_key(|position| chunk_priority(*position, center, view_forward));
@@ -234,11 +259,14 @@ pub(super) fn sync_chunk_renderer(
         let registry = registry.clone();
         let seed = generation_settings.seed;
         let task = pool.spawn(async move {
+            let started = Instant::now();
+            let meshes = build_chunk_mesh(position, &snapshot, &registry, seed);
             MeshingResult {
                 position,
                 revision,
                 seed,
-                meshes: build_chunk_mesh(position, &snapshot, &registry, seed),
+                meshes,
+                meshing_elapsed: started.elapsed(),
             }
         });
         let previous = tasks.running.insert(
@@ -254,9 +282,18 @@ pub(super) fn sync_chunk_renderer(
             "a chunk must have at most one mesh task"
         );
     }
+
+    stats.queued = priority_queue.len();
+    stats.running = tasks.running.len();
+    stats.awaiting_upload = tasks.completed.len();
+    stats.max_tasks = settings.max_meshing_tasks;
+    stats.max_uploads_per_frame = settings.max_mesh_uploads_per_frame;
 }
 
-fn collect_completed_tasks(tasks: &mut ChunkMeshingTasks) {
+fn collect_completed_tasks(
+    tasks: &mut ChunkMeshingTasks,
+    mut profiling: Option<&mut WorldProfiling>,
+) {
     let completed = tasks
         .running
         .iter_mut()
@@ -264,6 +301,9 @@ fn collect_completed_tasks(tasks: &mut ChunkMeshingTasks) {
         .collect::<Vec<_>>();
     for (position, result) in completed {
         tasks.running.remove(&position);
+        if let Some(profiling) = profiling.as_deref_mut() {
+            profiling.record_meshing(result.meshing_elapsed);
+        }
         let previous = tasks.completed.insert(position, result);
         debug_assert!(previous.is_none(), "a chunk has one completed mesh result");
     }
@@ -526,6 +566,7 @@ mod tests {
             .init_resource::<ChunkMeshingQueue>()
             .init_resource::<ChunkMeshingTasks>()
             .init_resource::<ChunkRenderer>()
+            .init_resource::<ChunkMeshingStats>()
             .insert_resource(BlockRegistry::default())
             .insert_resource(GenerationSettings::default())
             .insert_resource(MeshingSettings {
@@ -669,6 +710,10 @@ mod tests {
         assert!(renderer.entity(position).is_some());
         assert!(renderer.mesh(position).is_some());
         assert_eq!(renderer.revision(position), Some(1));
+        assert_eq!(
+            renderer.geometry_counts(app.world().resource::<Assets<Mesh>>()),
+            (576, 864)
+        );
         assert_eq!(
             app.world()
                 .resource::<ChunkGenerationQueue>()

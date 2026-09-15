@@ -27,6 +27,16 @@ pub struct MeshingSettings {
     pub max_mesh_uploads_per_frame: usize,
 }
 
+/// Read-only worker and upload counters consumed by the F3 overlay.
+#[derive(Clone, Copy, Debug, Default, Resource)]
+pub struct ChunkMeshingStats {
+    pub queued: usize,
+    pub running: usize,
+    pub awaiting_upload: usize,
+    pub max_tasks: usize,
+    pub max_uploads_per_frame: usize,
+}
+
 impl Default for MeshingSettings {
     fn default() -> Self {
         Self {
@@ -50,6 +60,7 @@ impl Plugin for ChunkMeshingPlugin {
             .init_resource::<ChunkMeshingQueue>()
             .init_resource::<ChunkMeshingTasks>()
             .init_resource::<ChunkRenderer>()
+            .init_resource::<ChunkMeshingStats>()
             .add_systems(Startup, create_chunk_material)
             .add_systems(
                 Update,
@@ -64,6 +75,7 @@ impl Plugin for ChunkMeshingPlugin {
 pub(crate) fn reset_session(world: &mut World) {
     world.insert_resource(ChunkMeshingQueue::default());
     world.insert_resource(ChunkMeshingTasks::default());
+    world.insert_resource(ChunkMeshingStats::default());
 }
 
 fn create_chunk_material(
