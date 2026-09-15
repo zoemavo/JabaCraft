@@ -40,8 +40,9 @@ effect follows camera immersion independently of the body and clears on surfacin
 The HUD stays readable. Existing health rules are unchanged.
 
 Each chunk has independent opaque/cutout and water mesh assets and entities.
-Leaves retain the cutout material; water uses a separate matte alpha-blended,
-double-sided material and does not cast shadows. Shared water faces are culled
+Leaves retain the cutout material; water uses the Faithful atlas water tile on
+a separate matte alpha-blended, double-sided material and does not cast shadows.
+Shared water faces are culled
 across all chunk boundaries, while solid shore faces remain visible through
 the water. Both layers are rebuilt and released with the chunk lifecycle.
 Transparency uses Bevy's normal mesh sorting, not per-triangle sorting or OIT.

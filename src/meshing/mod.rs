@@ -75,7 +75,11 @@ fn create_chunk_material(
 ) {
     let atlas = images.add(create_block_texture_atlas());
     let water = materials.add(StandardMaterial {
-        base_color: Color::srgba(0.32, 0.58, 0.72, 0.55),
+        // Water faces already point at the Faithful water tile in the block
+        // atlas. Keep the material white so its pixel art and original alpha
+        // survive instead of being replaced by a flat color.
+        base_color: Color::WHITE,
+        base_color_texture: Some(atlas.clone()),
         alpha_mode: AlphaMode::Blend,
         perceptual_roughness: 1.0,
         reflectance: 0.0,
@@ -148,7 +152,16 @@ mod tests {
         ));
         let water = materials.get(&handles.1).unwrap();
         assert_eq!(water.alpha_mode, AlphaMode::Blend);
-        assert!(water.base_color.alpha() > 0.0 && water.base_color.alpha() < 1.0);
+        assert_eq!(water.base_color, Color::WHITE);
+        assert_eq!(
+            water.base_color_texture,
+            app.world()
+                .resource::<Assets<VoxelMaterial>>()
+                .get(&handles.0)
+                .unwrap()
+                .base
+                .base_color_texture
+        );
         assert!(water.double_sided);
         assert_eq!(water.cull_mode, None);
     }
