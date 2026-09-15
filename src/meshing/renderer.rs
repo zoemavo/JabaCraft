@@ -1,6 +1,6 @@
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::{BinaryHeap, HashMap},
     time::{Duration, Instant},
 };
 
@@ -51,6 +51,7 @@ struct RenderedChunk {
 #[derive(Debug, Default, Resource)]
 pub struct ChunkRenderer {
     rendered: HashMap<ChunkPos, RenderedChunk>,
+    last_cleanup_epoch: Option<u64>,
 }
 
 struct MeshingResult {
@@ -78,6 +79,9 @@ struct MeshingJob {
 #[derive(Default, Resource)]
 pub(super) struct ChunkMeshingQueue {
     pending: BinaryHeap<Reverse<ChunkPriority>>,
+    storage_epoch: Option<u64>,
+    last_priority_center: Option<ChunkPos>,
+    last_priority_forward: Vec3,
 }
 
 impl ChunkMeshingQueue {
@@ -93,6 +97,29 @@ impl ChunkMeshingQueue {
                 .into_iter()
                 .map(|position| Reverse(chunk_priority(position, center, view_forward))),
         );
+        self.last_priority_center = Some(center);
+        self.last_priority_forward = view_forward.normalize_or(Vec3::NEG_Z);
+    }
+
+    fn reprioritize_pending(&mut self, center: ChunkPos, view_forward: Vec3) {
+        let normalized_forward = view_forward.normalize_or(Vec3::NEG_Z);
+        let direction_changed = self.last_priority_forward == Vec3::ZERO
+            || self.last_priority_forward.dot(normalized_forward) < 0.996;
+        if self.last_priority_center == Some(center) && !direction_changed {
+            return;
+        }
+        let old_pending = std::mem::take(&mut self.pending);
+        self.reprioritize(
+            old_pending
+                .into_iter()
+                .map(|Reverse((_, _, _, position))| position),
+            center,
+            normalized_forward,
+        );
+    }
+
+    fn invalidate(&mut self) {
+        self.storage_epoch = None;
     }
 
     fn pop(&mut self) -> Option<ChunkPos> {
@@ -192,13 +219,19 @@ pub(super) fn sync_chunk_renderer(
         })
         .unwrap_or((ChunkPos::default(), Vec3::NEG_Z));
 
-    despawn_unloaded_chunks(&mut commands, &storage, &mut renderer, &mut meshes);
-    cancel_obsolete_meshing(
+    let storage_epoch = storage.mesh_change_epoch();
+    if renderer.last_cleanup_epoch != Some(storage_epoch) {
+        despawn_unloaded_chunks(&mut commands, &storage, &mut renderer, &mut meshes);
+        renderer.last_cleanup_epoch = Some(storage_epoch);
+    }
+    if cancel_obsolete_meshing(
         &mut tasks,
         &storage,
         &mut generation_queue,
         generation_settings.seed,
-    );
+    ) {
+        priority_queue.invalidate();
+    }
     collect_completed_tasks(&mut tasks, profiling.as_deref_mut());
 
     let mut completed = tasks.completed.keys().copied().collect::<Vec<_>>();
@@ -211,7 +244,7 @@ pub(super) fn sync_chunk_renderer(
             .completed
             .remove(&position)
             .expect("completed position came from the result map");
-        apply_meshing_result(
+        if !apply_meshing_result(
             result,
             &mut commands,
             &material,
@@ -220,12 +253,13 @@ pub(super) fn sync_chunk_renderer(
             &mut storage,
             &mut generation_queue,
             &mut renderer,
-        );
+        ) {
+            priority_queue.invalidate();
+        }
     }
 
-    let pending = storage
-        .iter()
-        .filter_map(|(position, chunk)| {
+    if priority_queue.storage_epoch != Some(storage_epoch) {
+        let pending = storage.iter().filter_map(|(position, chunk)| {
             let can_mesh = matches!(
                 generation_queue.state(position),
                 Some(ChunkLifecycle::Generated | ChunkLifecycle::Ready)
@@ -234,9 +268,12 @@ pub(super) fn sync_chunk_renderer(
                 && !tasks.running.contains_key(&position)
                 && (!renderer.contains(position) || chunk.is_dirty()))
             .then_some(position)
-        })
-        .collect::<Vec<_>>();
-    priority_queue.reprioritize(pending, center, view_forward);
+        });
+        priority_queue.reprioritize(pending, center, view_forward);
+        priority_queue.storage_epoch = Some(storage_epoch);
+    } else {
+        priority_queue.reprioritize_pending(center, view_forward);
+    }
 
     let available_slots = settings
         .max_meshing_tasks
@@ -314,7 +351,7 @@ fn cancel_obsolete_meshing(
     storage: &ChunkStorage,
     queue: &mut ChunkGenerationQueue,
     seed: u64,
-) {
+) -> bool {
     let mut obsolete = tasks
         .running
         .iter()
@@ -322,12 +359,13 @@ fn cancel_obsolete_meshing(
             (!meshing_job_is_current(position, job.revision, job.seed, storage, queue, seed))
                 .then_some(position)
         })
-        .collect::<HashSet<_>>();
+        .collect::<Vec<_>>();
     obsolete.extend(tasks.completed.iter().filter_map(|(&position, result)| {
         (!meshing_job_is_current(position, result.revision, result.seed, storage, queue, seed))
             .then_some(position)
     }));
 
+    let had_obsolete = !obsolete.is_empty();
     for position in obsolete {
         tasks.running.remove(&position);
         tasks.completed.remove(&position);
@@ -340,6 +378,7 @@ fn cancel_obsolete_meshing(
             }
         }
     }
+    had_obsolete
 }
 
 fn meshing_job_is_current(
@@ -529,12 +568,8 @@ fn despawn_unloaded_chunks(
     renderer: &mut ChunkRenderer,
     meshes: &mut Assets<Mesh>,
 ) {
-    let loaded = storage
-        .iter()
-        .map(|(position, _)| position)
-        .collect::<HashSet<_>>();
     renderer.rendered.retain(|position, rendered| {
-        if loaded.contains(position) {
+        if storage.contains_chunk(*position) {
             true
         } else {
             release_render_objects(commands, meshes, rendered);
@@ -698,10 +733,11 @@ mod tests {
     }
 
     #[test]
-    fn loaded_chunk_gets_exactly_one_entity_and_mesh_asset() {
+    fn full_4096_voxel_chunk_gets_exactly_one_entity_and_mesh_asset() {
         let mut app = renderer_test_app();
         let position = ChunkPos::new(0, 0, 0);
         insert_chunk(&mut app, position, BlockId::STONE);
+        assert_eq!(CHUNK_WIDTH * CHUNK_HEIGHT * CHUNK_DEPTH, 4_096);
 
         finish_meshing(&mut app);
 

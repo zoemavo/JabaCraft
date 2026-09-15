@@ -233,7 +233,7 @@ fn refresh_debug_overlay(
         .len();
     let (vertex_count, index_count) = renderer.geometry_counts(&meshes);
     let triangle_count = index_count / 3;
-    let voxel_bytes = storage.iter().count() * CHUNK_VOLUME * size_of::<BlockId>();
+    let voxel_bytes = storage.len() * CHUNK_VOLUME * size_of::<BlockId>();
     let mesh_bytes = vertex_count * MESH_VERTEX_BYTES + index_count * size_of::<u32>();
     let biome = BiomeSampler::new(generation.seed)
         .sample(i64::from(block_position.x), i64::from(block_position.z))
@@ -279,7 +279,7 @@ fn refresh_debug_overlay(
     let _ = writeln!(
         output,
         "Chunks: {} loaded | {} visible | {} renderer entries",
-        storage.iter().count(),
+        storage.len(),
         visible_chunks,
         renderer.len()
     );

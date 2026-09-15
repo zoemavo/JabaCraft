@@ -42,12 +42,58 @@ pub(super) struct ChunkGenerationTasks {
     running: HashMap<ChunkPos, Task<GeneratedChunk>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StreamingWindowKey {
+    center: ChunkPos,
+    radius: i32,
+    world_min_y: i32,
+    world_max_y: i32,
+    seed: u64,
+    cave_frequency: u64,
+    cave_threshold: u32,
+    cave_surface_clearance: i32,
+}
+
+#[derive(Default, Resource)]
+pub(super) struct ChunkStreamingWindow {
+    key: Option<StreamingWindowKey>,
+    required: HashSet<ChunkPos>,
+}
+
+impl ChunkStreamingWindow {
+    fn refresh(
+        &mut self,
+        center: ChunkPos,
+        settings: &GenerationSettings,
+        caves: &CaveSettings,
+    ) -> bool {
+        let key = StreamingWindowKey {
+            center,
+            radius: settings.render_distance_chunks,
+            world_min_y: settings.world_min_y,
+            world_max_y: settings.world_max_y,
+            seed: settings.seed,
+            cave_frequency: caves.frequency.to_bits(),
+            cave_threshold: caves.threshold.to_bits(),
+            cave_surface_clearance: caves.surface_clearance,
+        };
+        if self.key == Some(key) {
+            return false;
+        }
+        self.required = required_chunk_positions(center, settings);
+        self.key = Some(key);
+        true
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn stream_chunks_around_player(
     players: Query<(&Transform, &LookState), With<Player>>,
     settings: Res<GenerationSettings>,
     cave_settings: Res<CaveSettings>,
     mut queue: ResMut<ChunkGenerationQueue>,
     mut tasks: ResMut<ChunkGenerationTasks>,
+    mut window: ResMut<ChunkStreamingWindow>,
     mut storage: ResMut<ChunkStorage>,
     mut stats: ResMut<ChunkStreamingStats>,
     mut profiling: Option<ResMut<WorldProfiling>>,
@@ -59,8 +105,13 @@ pub(super) fn stream_chunks_around_player(
     let center = chunk_position_from_translation(player_transform.translation);
     let view_forward =
         Quat::from_rotation_y(look.yaw) * Quat::from_rotation_x(look.pitch) * Vec3::NEG_Z;
-    let required = required_chunk_positions(center, &settings);
-    let mut update = update_requests(&mut storage, &mut queue, &mut tasks, &required);
+    let window_changed = window.refresh(center, &settings, &cave_settings);
+    let required = &window.required;
+    let mut update = if window_changed {
+        update_requests(&mut storage, &mut queue, &mut tasks, required)
+    } else {
+        StreamingUpdate::default()
+    };
 
     for result in take_completed_tasks(&mut tasks) {
         if let Some(profiling) = profiling.as_deref_mut() {
@@ -69,7 +120,7 @@ pub(super) fn stream_chunks_around_player(
         let load_started = Instant::now();
         if apply_generation_result(
             result,
-            &required,
+            required,
             &settings,
             &cave_settings,
             &mut storage,
@@ -122,7 +173,7 @@ pub(super) fn stream_chunks_around_player(
             update.unloaded,
             queue.pending_count(),
             tasks.running.len(),
-            storage.iter().count()
+            storage.len()
         );
     }
 }
@@ -252,7 +303,13 @@ fn required_chunk_positions(center: ChunkPos, settings: &GenerationSettings) -> 
         return HashSet::new();
     };
     let radius_squared = i64::from(radius).pow(2);
-    let mut required = HashSet::new();
+    let diameter = radius.saturating_mul(2).saturating_add(1) as usize;
+    let vertical_count = (max_chunk_y - min_chunk_y + 1) as usize;
+    let mut required = HashSet::with_capacity(
+        diameter
+            .saturating_mul(diameter)
+            .saturating_mul(vertical_count),
+    );
 
     for chunk_y in min_chunk_y..=max_chunk_y {
         for offset_z in -radius..=radius {
@@ -351,6 +408,21 @@ mod tests {
         assert!(required.contains(&ChunkPos::new(12, 11, -3)));
         assert!(!required.contains(&ChunkPos::new(12, 2, 5)));
         assert!(!required.contains(&ChunkPos::new(4, 12, -3)));
+    }
+
+    #[test]
+    fn streaming_window_is_rebuilt_only_when_inputs_change() {
+        let mut window = ChunkStreamingWindow::default();
+        let mut settings = GenerationSettings::default();
+        let caves = CaveSettings::default();
+
+        assert!(window.refresh(ChunkPos::default(), &settings, &caves));
+        assert!(!window.refresh(ChunkPos::default(), &settings, &caves));
+
+        settings.render_distance_chunks += 1;
+        assert!(window.refresh(ChunkPos::default(), &settings, &caves));
+        assert!(!window.refresh(ChunkPos::default(), &settings, &caves));
+        assert!(window.refresh(ChunkPos::new(1, 0, 0), &settings, &caves));
     }
 
     #[test]

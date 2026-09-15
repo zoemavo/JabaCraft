@@ -20,6 +20,7 @@ use super::{CameraRaycast, InteractionSettings, VoxelRaycastHit, input::Debounce
 #[derive(Debug, Default, Resource)]
 pub(super) struct BlockPlaceInput(DebouncedButtonInput);
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn place_selected_block(
     time: Res<Time>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
@@ -122,6 +123,7 @@ fn try_place_block(
     storage.set_block(position, block).is_ok()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_place_selected_block(
     storage: &mut ChunkStorage,
     registry: &BlockRegistry,

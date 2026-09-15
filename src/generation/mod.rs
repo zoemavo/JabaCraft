@@ -12,7 +12,7 @@ mod terrain;
 
 use bevy::prelude::*;
 
-use streaming::{ChunkGenerationTasks, stream_chunks_around_player};
+use streaming::{ChunkGenerationTasks, ChunkStreamingWindow, stream_chunks_around_player};
 
 pub use biome::{Biome, BiomeDefinition, BiomeSample, BiomeSampler};
 pub use cave::CaveSettings;
@@ -70,10 +70,13 @@ impl Plugin for GenerationPlugin {
             .init_resource::<CaveSettings>()
             .init_resource::<ChunkGenerationQueue>()
             .init_resource::<ChunkGenerationTasks>()
+            .init_resource::<ChunkStreamingWindow>()
             .init_resource::<ChunkStreamingStats>()
             .add_systems(
                 Update,
-                stream_chunks_around_player.in_set(ChunkStreamingSet),
+                stream_chunks_around_player
+                    .in_set(ChunkStreamingSet)
+                    .run_if(in_state(crate::game::GameState::Playing)),
             );
     }
 }
@@ -81,5 +84,6 @@ impl Plugin for GenerationPlugin {
 pub(crate) fn reset_session(world: &mut World) {
     world.insert_resource(ChunkGenerationQueue::default());
     world.insert_resource(ChunkGenerationTasks::default());
+    world.insert_resource(ChunkStreamingWindow::default());
     world.insert_resource(ChunkStreamingStats::default());
 }

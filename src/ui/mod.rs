@@ -205,6 +205,7 @@ fn spawn_hotbar_slot(parent: &mut ChildSpawnerCommands, index: usize) {
         });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sync_hotbar_ui(
     inventory: Res<PlayerInventory>,
     inventory_state: Res<InventoryState>,
@@ -220,11 +221,13 @@ fn sync_hotbar_ui(
     mut selected_name: Single<&mut Text, (With<HotbarSelectedName>, Without<HotbarCountView>)>,
     asset_server: Res<AssetServer>,
 ) {
-    root.display = if inventory_state.is_open() {
-        Display::None
-    } else {
-        Display::Flex
-    };
+    if inventory_state.is_changed() {
+        root.display = if inventory_state.is_open() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+    }
 
     if !inventory.is_changed() && !inventory_state.is_changed() {
         return;

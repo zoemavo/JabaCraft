@@ -138,6 +138,7 @@ fn option(
             button(row, assets, "+", up, 40.0);
         });
 }
+#[allow(clippy::too_many_arguments)]
 fn draw(
     mut commands: Commands,
     pause: Res<Pause>,

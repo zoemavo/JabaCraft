@@ -455,6 +455,7 @@ fn poll_job(
         }
     }
 }
+#[allow(clippy::type_complexity)]
 fn leave_menu(
     mut commands: Commands,
     roots: Query<Entity, Or<(With<MenuRoot>, With<MenuCamera>)>>,
@@ -526,6 +527,7 @@ fn initial_save(mut save: MessageWriter<ManualSave>) {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     #[test]

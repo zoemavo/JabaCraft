@@ -94,6 +94,9 @@ fn apply(
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut volume: ResMut<GlobalVolume>,
 ) {
+    if !settings.is_changed() {
+        return;
+    }
     if generation.render_distance_chunks != settings.render_distance {
         generation.render_distance_chunks = settings.render_distance;
     }
@@ -123,6 +126,9 @@ fn apply_audio(
         Option<&mut bevy::audio::SpatialAudioSink>,
     )>,
 ) {
+    if !settings.is_changed() {
+        return;
+    }
     use bevy::audio::AudioSinkPlayback;
     for (playback, sink, spatial) in &mut sinks {
         let volume = playback.volume * Volume::Linear(settings.master_volume);

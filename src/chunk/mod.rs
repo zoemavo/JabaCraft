@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
 use bevy::prelude::*;
 
@@ -17,7 +18,9 @@ pub use crate::coordinates::{
 /// Rendering entities and meshes deliberately live outside this type.
 #[derive(Clone, Debug)]
 pub struct Chunk {
-    blocks: Box<[BlockId]>,
+    // Worker jobs retain immutable voxel snapshots. Copy-on-write keeps those
+    // snapshots cheap without allowing workers to observe later edits.
+    blocks: Arc<[BlockId]>,
     dirty: bool,
     save_dirty: bool,
     mesh_revision: u64,
@@ -27,7 +30,7 @@ impl Chunk {
     /// Creates a chunk filled with one block type and awaiting its first mesh.
     pub fn new(fill: BlockId) -> Self {
         Self {
-            blocks: vec![fill; CHUNK_VOLUME].into_boxed_slice(),
+            blocks: Arc::from(vec![fill; CHUNK_VOLUME]),
             dirty: true,
             save_dirty: false,
             mesh_revision: 1,
@@ -66,7 +69,7 @@ impl Chunk {
         let previous = self.blocks[index];
 
         if previous != block {
-            self.blocks[index] = block;
+            Arc::make_mut(&mut self.blocks)[index] = block;
             self.dirty = true;
             self.save_dirty = true;
             self.bump_mesh_revision();
@@ -80,7 +83,7 @@ impl Chunk {
         let previous = self.blocks[index];
 
         if previous != block {
-            self.blocks[index] = block;
+            Arc::make_mut(&mut self.blocks)[index] = block;
             self.dirty = true;
             self.save_dirty = true;
             self.bump_mesh_revision();
@@ -133,7 +136,7 @@ impl Chunk {
             return Err(blocks.len());
         }
         Ok(Self {
-            blocks: blocks.into_boxed_slice(),
+            blocks: Arc::from(blocks),
             dirty: true,
             save_dirty: false,
             mesh_revision: 1,
@@ -173,6 +176,8 @@ pub struct ChunkStorage {
     chunks: HashMap<ChunkPos, Chunk>,
     /// Saved and unsaved player-modified chunks retained across streaming unloads.
     saved_overrides: HashMap<ChunkPos, Chunk>,
+    /// Changes when loaded voxel geometry may need rediscovery by the mesher.
+    mesh_change_epoch: u64,
 }
 
 impl ChunkStorage {
@@ -185,6 +190,7 @@ impl ChunkStorage {
             .unwrap_or(chunk);
         let previous = self.chunks.insert(position, chunk);
         self.mark_face_neighbors_dirty(position);
+        self.bump_mesh_change_epoch();
         previous
     }
 
@@ -196,6 +202,7 @@ impl ChunkStorage {
         }
         if removed.is_some() {
             self.mark_face_neighbors_dirty(position);
+            self.bump_mesh_change_epoch();
         }
         removed
     }
@@ -212,6 +219,18 @@ impl ChunkStorage {
         self.chunks.contains_key(&position)
     }
 
+    pub fn len(&self) -> usize {
+        self.chunks.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.chunks.is_empty()
+    }
+
+    pub(crate) const fn mesh_change_epoch(&self) -> u64 {
+        self.mesh_change_epoch
+    }
+
     /// Iterates over loaded chunk positions and their voxel data.
     pub fn iter(&self) -> impl Iterator<Item = (ChunkPos, &Chunk)> {
         self.chunks
@@ -223,7 +242,7 @@ impl ChunkStorage {
     /// the bounded voxel light map. The owned snapshot is safe to move to a
     /// worker without granting it access to the ECS world.
     pub(crate) fn meshing_snapshot(&self, center: ChunkPos) -> Self {
-        let mut chunks = HashMap::new();
+        let mut chunks = HashMap::with_capacity(27);
         for y in (center.y - 1)..=(center.y + 1) {
             for z in (center.z - 1)..=(center.z + 1) {
                 for x in (center.x - 1)..=(center.x + 1) {
@@ -237,6 +256,7 @@ impl ChunkStorage {
         Self {
             chunks,
             saved_overrides: HashMap::new(),
+            mesh_change_epoch: 0,
         }
     }
 
@@ -247,15 +267,15 @@ impl ChunkStorage {
     }
 
     /// Returns all modified chunks, replacing older retained copies with live data.
-    pub(crate) fn save_snapshot(&self) -> Vec<(ChunkPos, Vec<BlockId>)> {
+    pub(crate) fn save_snapshot(&self) -> Vec<(ChunkPos, Arc<[BlockId]>)> {
         let mut chunks = self
             .saved_overrides
             .iter()
-            .map(|(&position, chunk)| (position, chunk.blocks().to_vec()))
+            .map(|(&position, chunk)| (position, Arc::clone(&chunk.blocks)))
             .collect::<HashMap<_, _>>();
         for (position, chunk) in &self.chunks {
             if chunk.is_save_dirty() || chunks.contains_key(position) {
-                chunks.insert(*position, chunk.blocks().to_vec());
+                chunks.insert(*position, Arc::clone(&chunk.blocks));
             }
         }
         let mut chunks = chunks.into_iter().collect::<Vec<_>>();
@@ -270,23 +290,23 @@ impl ChunkStorage {
 
     /// Acknowledge only the exact snapshot that reached disk. Edits made while
     /// the background job ran stay dirty for the next job.
-    pub(crate) fn acknowledge_saved(&mut self, snapshot: &[(ChunkPos, Vec<BlockId>)]) {
+    pub(crate) fn acknowledge_saved(&mut self, snapshot: &[(ChunkPos, Arc<[BlockId]>)]) {
         for (position, blocks) in snapshot {
             if let Some(live) = self.chunks.get_mut(position)
-                && live.blocks() == blocks.as_slice()
+                && live.blocks() == blocks.as_ref()
             {
                 live.mark_saved();
             }
             let matches_retained = self
                 .saved_overrides
                 .get(position)
-                .is_some_and(|chunk| chunk.blocks() == blocks.as_slice());
+                .is_some_and(|chunk| chunk.blocks() == blocks.as_ref());
             if matches_retained {
                 self.saved_overrides.get_mut(position).unwrap().mark_saved();
             } else if self
                 .chunks
                 .get(position)
-                .is_some_and(|chunk| chunk.blocks() == blocks.as_slice())
+                .is_some_and(|chunk| chunk.blocks() == blocks.as_ref())
             {
                 let mut saved = self.chunks[position].clone();
                 saved.mark_saved();
@@ -319,6 +339,7 @@ impl ChunkStorage {
 
         if previous != block {
             self.mark_border_neighbors_dirty(chunk_position, local_position);
+            self.bump_mesh_change_epoch();
         }
 
         Ok(previous)
@@ -384,6 +405,10 @@ impl ChunkStorage {
             chunk.mark_dirty();
         }
     }
+
+    fn bump_mesh_change_epoch(&mut self) {
+        self.mesh_change_epoch = self.mesh_change_epoch.wrapping_add(1);
+    }
 }
 
 fn face_neighbors(position: ChunkPos) -> [ChunkPos; 6] {
@@ -437,6 +462,71 @@ mod tests {
         assert_eq!(chunk.blocks().len(), CHUNK_VOLUME);
         assert!(chunk.blocks().iter().all(|block| *block == BlockId::AIR));
         assert!(chunk.is_all_air());
+    }
+
+    #[test]
+    fn cloned_chunk_snapshots_share_voxels_until_an_edit() {
+        let original = Chunk::new(BlockId::STONE);
+        let mut snapshot = original.clone();
+
+        assert!(Arc::ptr_eq(&original.blocks, &snapshot.blocks));
+        snapshot.set_block(1, 2, 3, BlockId::AIR).unwrap();
+
+        assert!(!Arc::ptr_eq(&original.blocks, &snapshot.blocks));
+        assert_eq!(original.get_block(1, 2, 3), Some(BlockId::STONE));
+        assert_eq!(snapshot.get_block(1, 2, 3), Some(BlockId::AIR));
+    }
+
+    #[test]
+    fn meshing_and_save_snapshots_reuse_voxel_allocations() {
+        let position = ChunkPos::default();
+        let block = WorldBlockPos::new(1, 2, 3);
+        let mut storage = ChunkStorage::default();
+        storage.insert_chunk(position, Chunk::new(BlockId::AIR));
+        storage.set_block(block, BlockId::STONE).unwrap();
+
+        let meshing = storage.meshing_snapshot(position);
+        let save = storage.save_snapshot();
+        let live = &storage.get_chunk(position).unwrap().blocks;
+
+        assert!(Arc::ptr_eq(
+            live,
+            &meshing.get_chunk(position).unwrap().blocks
+        ));
+        assert!(Arc::ptr_eq(live, &save[0].1));
+
+        storage.set_block(block, BlockId::DIRT).unwrap();
+        assert_eq!(meshing.get_block(block), Some(BlockId::STONE));
+        assert_eq!(
+            save[0].1[LocalBlockPos::new(1, 2, 3).unwrap().index()],
+            BlockId::STONE
+        );
+    }
+
+    /// Reproducible comparison for the snapshot operation used by meshing and saves.
+    /// cargo test --release chunk_snapshot_benchmark -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn chunk_snapshot_benchmark() {
+        use std::{hint::black_box, time::Instant};
+
+        const RUNS: usize = 20_000;
+        let chunk = Chunk::new(BlockId::STONE);
+        let started = Instant::now();
+        for _ in 0..RUNS {
+            black_box(chunk.blocks().to_vec());
+        }
+        let deep_copy_micros = started.elapsed().as_secs_f64() * 1_000_000.0 / RUNS as f64;
+
+        let started = Instant::now();
+        for _ in 0..RUNS {
+            black_box(chunk.clone());
+        }
+        let shared_clone_micros = started.elapsed().as_secs_f64() * 1_000_000.0 / RUNS as f64;
+
+        println!(
+            "chunk snapshot mean: deep copy {deep_copy_micros:.3} us, shared clone {shared_clone_micros:.3} us ({RUNS} runs)"
+        );
     }
 
     #[test]

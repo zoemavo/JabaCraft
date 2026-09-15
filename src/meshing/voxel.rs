@@ -5,7 +5,7 @@ use bevy::{
 
 use crate::{
     block::{BlockFace, BlockId, BlockRegistry, TextureIndex},
-    chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, ChunkStorage},
+    chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk, ChunkStorage},
     coordinates::{ChunkPos, LocalBlockPos, WorldBlockPos},
 };
 
@@ -75,7 +75,15 @@ fn build_chunk_mesh_buffers_naive(
 
                 let world = chunk_position.world_block(local);
                 for face in FACES {
-                    if is_face_visible(world, face, storage, registry) {
+                    if is_local_face_visible(
+                        chunk_position,
+                        local,
+                        block,
+                        face,
+                        chunk,
+                        storage,
+                        registry,
+                    ) {
                         let texture = registry.texture_for(block, face.block_face);
                         let lights = lights.get_or_insert_with(|| {
                             ChunkLightMap::build(chunk_position, storage, registry, terrain_seed)
@@ -125,15 +133,17 @@ fn build_chunk_mesh_buffers_with_seed(
     let mut output = SplitBuffers::default();
     let mut lightmap = None;
     let dimensions = [CHUNK_WIDTH, CHUNK_HEIGHT, CHUNK_DEPTH];
+    let mut mask = [None; CHUNK_WIDTH * CHUNK_HEIGHT];
+    debug_assert!(CHUNK_WIDTH * CHUNK_DEPTH <= mask.len());
+    debug_assert!(CHUNK_HEIGHT * CHUNK_DEPTH <= mask.len());
     for face in FACES {
         let axis = face.normal.iter().position(|n| *n != 0.0).unwrap();
         let a = if axis == 0 { 1 } else { 0 };
         let b = if axis == 2 { 1 } else { 2 };
         let width = dimensions[a];
         let height = dimensions[b];
-        let mut mask = vec![None; width * height];
         for slice in 0..dimensions[axis] {
-            mask.fill(None);
+            mask[..width * height].fill(None);
             for v in 0..height {
                 for u in 0..width {
                     let mut cell = [0; 3];
@@ -146,7 +156,9 @@ fn build_chunk_mesh_buffers_with_seed(
                         continue;
                     }
                     let world = position.world_block(local);
-                    if !is_face_visible_for_block(world, block, face, storage, registry) {
+                    if !is_local_face_visible(
+                        position, local, block, face, chunk, storage, registry,
+                    ) {
                         continue;
                     }
                     let lights = lightmap.get_or_insert_with(|| {
@@ -209,19 +221,40 @@ fn build_chunk_mesh_buffers_with_seed(
     output
 }
 
-fn is_face_visible_for_block(
-    position: WorldBlockPos,
+#[allow(clippy::too_many_arguments)]
+fn is_local_face_visible(
+    chunk_position: ChunkPos,
+    local: LocalBlockPos,
     block: BlockId,
     face: Face,
+    chunk: &Chunk,
     storage: &ChunkStorage,
     registry: &BlockRegistry,
 ) -> bool {
-    let neighbor = WorldBlockPos::new(
-        position.x + face.neighbor[0],
-        position.y + face.neighbor[1],
-        position.z + face.neighbor[2],
-    );
-    storage.get_block(neighbor).is_none_or(|other| {
+    let neighbor_x = local.x() as i32 + face.neighbor[0];
+    let neighbor_y = local.y() as i32 + face.neighbor[1];
+    let neighbor_z = local.z() as i32 + face.neighbor[2];
+    let neighbor = if (0..CHUNK_WIDTH as i32).contains(&neighbor_x)
+        && (0..CHUNK_HEIGHT as i32).contains(&neighbor_y)
+        && (0..CHUNK_DEPTH as i32).contains(&neighbor_z)
+    {
+        let local = LocalBlockPos::new(
+            neighbor_x as usize,
+            neighbor_y as usize,
+            neighbor_z as usize,
+        )
+        .expect("validated neighbor is inside the current chunk");
+        Some(chunk.get_local(local))
+    } else {
+        let world = chunk_position.world_block(local);
+        let neighbor = WorldBlockPos::new(
+            world.x + face.neighbor[0],
+            world.y + face.neighbor[1],
+            world.z + face.neighbor[2],
+        );
+        storage.get_block(neighbor)
+    };
+    neighbor.is_none_or(|other| {
         registry.is_transparent(other) && !(block == BlockId::WATER && other == BlockId::WATER)
     })
 }

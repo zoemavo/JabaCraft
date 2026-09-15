@@ -22,6 +22,9 @@ pub enum ChunkLifecycle {
 pub struct ChunkGenerationQueue {
     states: HashMap<ChunkPos, ChunkLifecycle>,
     pending: BinaryHeap<Reverse<ChunkPriority>>,
+    priority_dirty: bool,
+    last_priority_center: Option<ChunkPos>,
+    last_priority_forward: Vec3,
 }
 
 impl ChunkGenerationQueue {
@@ -52,11 +55,14 @@ impl ChunkGenerationQueue {
             return false;
         }
         self.states.insert(position, ChunkLifecycle::Requested);
+        self.priority_dirty = true;
         true
     }
 
     pub(crate) fn cancel(&mut self, position: ChunkPos) -> Option<ChunkLifecycle> {
-        self.states.remove(&position)
+        let removed = self.states.remove(&position);
+        self.priority_dirty |= removed == Some(ChunkLifecycle::Requested);
+        removed
     }
 
     pub(crate) fn positions(&self) -> impl Iterator<Item = ChunkPos> + '_ {
@@ -67,12 +73,20 @@ impl ChunkGenerationQueue {
         match self.states.get(&position) {
             Some(ChunkLifecycle::Generated | ChunkLifecycle::Meshing | ChunkLifecycle::Ready) => {}
             _ => {
+                self.priority_dirty |=
+                    self.states.get(&position) == Some(&ChunkLifecycle::Requested);
                 self.states.insert(position, ChunkLifecycle::Generated);
             }
         }
     }
 
     pub(crate) fn reprioritize(&mut self, center: ChunkPos, view_forward: Vec3) {
+        let normalized_forward = view_forward.normalize_or(Vec3::NEG_Z);
+        let direction_changed = self.last_priority_forward == Vec3::ZERO
+            || self.last_priority_forward.dot(normalized_forward) < 0.996;
+        if !self.priority_dirty && self.last_priority_center == Some(center) && !direction_changed {
+            return;
+        }
         self.pending.clear();
         for (&position, &state) in &self.states {
             if state == ChunkLifecycle::Requested {
@@ -80,6 +94,9 @@ impl ChunkGenerationQueue {
                     .push(Reverse(chunk_priority(position, center, view_forward)));
             }
         }
+        self.priority_dirty = false;
+        self.last_priority_center = Some(center);
+        self.last_priority_forward = normalized_forward;
     }
 
     pub(crate) fn take_next_generation(&mut self) -> Option<ChunkPos> {

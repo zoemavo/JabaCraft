@@ -134,14 +134,23 @@ pub(super) fn sync_survival_hud(
     assets: Res<AssetServer>,
     mut root: Single<&mut Node, With<SurvivalHudRoot>>,
     mut fills: Query<(&VitalFill, &mut ImageNode, &mut Visibility)>,
+    mut displayed: Local<Option<(bool, f32, u8)>>,
 ) {
-    root.display = if inventory_state.is_open() {
+    let (health, hunger) = stats.into_inner();
+    let current = (
+        inventory_state.is_open(),
+        health.current(),
+        hunger.food_level(),
+    );
+    if displayed.as_ref() == Some(&current) {
+        return;
+    }
+    *displayed = Some(current);
+    root.display = if current.0 {
         Display::None
     } else {
         Display::Flex
     };
-
-    let (health, hunger) = stats.into_inner();
 
     for (fill, mut image, mut visibility) in &mut fills {
         let value = match fill.kind {

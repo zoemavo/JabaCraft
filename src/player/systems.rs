@@ -28,9 +28,7 @@ pub(super) fn update_cursor_grab(
 ) {
     if inventory_state.is_open() {
         set_cursor_captured(&mut cursor, false);
-    } else if inventory_state.is_changed() {
-        set_cursor_captured(&mut cursor, true);
-    } else if mouse_buttons.just_pressed(MouseButton::Left) {
+    } else if inventory_state.is_changed() || mouse_buttons.just_pressed(MouseButton::Left) {
         set_cursor_captured(&mut cursor, true);
     }
 }
@@ -119,6 +117,7 @@ pub(super) fn collect_look_input(
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub(super) fn update_velocity(
     time: Res<Time>,
     settings: Res<PlayerSettings>,
@@ -273,6 +272,7 @@ fn velocity_after_gravity(current: f32, delta_seconds: f32, settings: &PlayerSet
         .max(-settings.terminal_velocity.abs())
 }
 
+#[allow(clippy::type_complexity)]
 pub(super) fn sync_view_transforms(
     player: Single<(&LookState, &mut Transform), (With<Player>, Without<PlayerCamera>)>,
     mut camera: Single<&mut Transform, (With<PlayerCamera>, Without<Player>)>,

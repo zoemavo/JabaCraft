@@ -552,8 +552,9 @@ pub(super) fn handle_crafting_click(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn sync_crafting_preview(
+    state: Res<InventoryState>,
     inventory: Res<PlayerInventory>,
     recipes: Res<RecipeRegistry>,
     icon_assets: Res<ItemIconAssets>,
@@ -567,6 +568,9 @@ pub(super) fn sync_crafting_preview(
     mut output_icon: Single<&mut ImageNode, (With<CraftingOutputIcon>, Without<CraftingInputIcon>)>,
     mut output_count: Single<&mut Text, (With<CraftingOutputCount>, Without<CraftingInputCount>)>,
 ) {
+    if !state.is_open() {
+        return;
+    }
     let (interaction, mut output_node, mut output_background) = output_slot.into_inner();
     let Some(recipe) = displayed_recipe(&inventory, &recipes) else {
         output_node.display = Display::None;
@@ -622,6 +626,7 @@ fn displayed_recipe<'a>(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use crate::item::ItemId;
 
@@ -664,11 +669,16 @@ pub(super) fn sync_inventory_panel(
     mut icons: Query<(&InventorySlotIcon, &mut ImageNode)>,
     mut counts: Query<(&InventorySlotCount, &mut Text)>,
 ) {
-    panel.display = if state.is_open() {
-        Display::Flex
-    } else {
-        Display::None
-    };
+    if state.is_changed() {
+        panel.display = if state.is_open() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    if !state.is_open() {
+        return;
+    }
     for (_, interaction, mut background) in &mut slots {
         background.0 = if matches!(interaction, Interaction::Hovered | Interaction::Pressed) {
             HOVER_COLOR

@@ -4,7 +4,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
-use std::{collections::HashSet, io, path::PathBuf};
+use std::{collections::HashSet, io, path::PathBuf, sync::Arc};
 
 use bevy::{
     app::AppExit,
@@ -101,12 +101,12 @@ struct SaveSnapshot {
     world_path: PathBuf,
     chunk_path: PathBuf,
     world: WorldSave,
-    chunks: Option<Vec<(ChunkPos, Vec<BlockId>)>>,
+    chunks: Option<Vec<(ChunkPos, Arc<[BlockId]>)>>,
 }
 
 struct CompletedSave {
     result: Result<(), String>,
-    chunks: Option<Vec<(ChunkPos, Vec<BlockId>)>>,
+    chunks: Option<Vec<(ChunkPos, Arc<[BlockId]>)>>,
 }
 
 pub struct PersistencePlugin;
