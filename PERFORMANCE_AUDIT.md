@@ -1,6 +1,6 @@
 # Performance audit
 
-Audited on 2026-09-15 against Bevy 0.19 runtime paths. This is a code-path audit backed by release benchmarks and the existing F3 timing counters for terrain generation, meshing, and chunk loading.
+Audited on 2026-09-20 against Bevy 0.19 runtime paths. This is a code-path audit backed by release benchmarks and the existing F3 timing counters for terrain generation, meshing, and chunk loading.
 
 | Area | Finding | Result |
 | --- | --- | --- |

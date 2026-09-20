@@ -144,12 +144,36 @@ const MAX_SPAWN_SEARCH_RINGS: i64 = 512;
 
 fn find_land_spawn(seed: u64) -> LandSpawn {
     let sampler = BiomeSampler::new(seed);
+    let mut fallback_land = None;
+    let mut highest_sample = None;
+    let mut try_spawn = |world_x: i64, world_z: i64| {
+        let sample = sampler.sample(world_x, world_z);
+        let candidate = LandSpawn {
+            x: world_x,
+            z: world_z,
+            surface_y: sample.terrain_height,
+        };
+        if highest_sample
+            .as_ref()
+            .is_none_or(|best: &LandSpawn| candidate.surface_y > best.surface_y)
+        {
+            highest_sample = Some(candidate);
+        }
+        if fallback_land.is_none()
+            && sample.terrain_height >= SEA_LEVEL
+            && feature_block_at(seed, world_x, i64::from(sample.terrain_height) + 1, world_z)
+                .is_none()
+            && feature_block_at(seed, world_x, i64::from(sample.terrain_height) + 2, world_z)
+                .is_none()
+        {
+            fallback_land = Some(candidate);
+        }
+        safe_land_spawn_at(seed, &sampler, world_x, world_z)
+    };
 
     for ring in 0..=MAX_SPAWN_SEARCH_RINGS {
         if ring == 0 {
-            if let Some(spawn) =
-                safe_land_spawn_at(seed, &sampler, PREFERRED_SPAWN_X, PREFERRED_SPAWN_Z)
-            {
+            if let Some(spawn) = try_spawn(PREFERRED_SPAWN_X, PREFERRED_SPAWN_Z) {
                 return spawn;
             }
             continue;
@@ -162,7 +186,7 @@ fn find_land_spawn(seed: u64) -> LandSpawn {
             for offset_z in [min, max] {
                 let x = PREFERRED_SPAWN_X + offset_x * SPAWN_SEARCH_STEP;
                 let z = PREFERRED_SPAWN_Z + offset_z * SPAWN_SEARCH_STEP;
-                if let Some(spawn) = safe_land_spawn_at(seed, &sampler, x, z) {
+                if let Some(spawn) = try_spawn(x, z) {
                     return spawn;
                 }
             }
@@ -172,17 +196,19 @@ fn find_land_spawn(seed: u64) -> LandSpawn {
             for offset_x in [min, max] {
                 let x = PREFERRED_SPAWN_X + offset_x * SPAWN_SEARCH_STEP;
                 let z = PREFERRED_SPAWN_Z + offset_z * SPAWN_SEARCH_STEP;
-                if let Some(spawn) = safe_land_spawn_at(seed, &sampler, x, z) {
+                if let Some(spawn) = try_spawn(x, z) {
                     return spawn;
                 }
             }
         }
     }
 
-    panic!(
-        "world seed {seed} has no safe land spawn within {} blocks",
-        MAX_SPAWN_SEARCH_RINGS * SPAWN_SEARCH_STEP
-    );
+    // A pathological seed may have no nine-block flat patch in the search
+    // window. Prefer feature-free land over crashing during startup; the
+    // sampled-height fallback is only reachable for an all-ocean window.
+    fallback_land
+        .or(highest_sample)
+        .expect("spawn search always samples the preferred position")
 }
 
 fn safe_land_spawn_at(

@@ -1,3 +1,81 @@
+<div align="center">
+
+# JabaCraft
+
+Playable voxel sandbox MVP built with Rust and Bevy 0.19.
+
+</div>
+
+## Features
+
+- Main menu with new-world creation, optional `u64` seed, save-slot loading, and quit.
+- Procedural voxel terrain with biomes, trees, caves, ores, water, and day/night lighting.
+- Chunk streaming with bounded asynchronous generation and meshing queues.
+- Walking, sprinting, jumping, voxel collision, swimming, block breaking and placement.
+- Dropped items, hotbar, inventory, basic crafting, pause menu and live settings.
+- Autosave, manual save, atomic world files, and restoration of edited chunks after restart.
+- Stylized sky, sun, ambient fill, soft shadows, fog, and underwater color/fog treatment.
+- F3 diagnostics for frame timing, chunk queues, mesh geometry, target block, biome, and profiling.
+
+## Controls
+
+| Input | Action |
+| --- | --- |
+| `WASD` | Move |
+| `Ctrl` | Sprint |
+| `Space` | Jump; swim upward while in water |
+| `Shift` | Descend while noclip is enabled |
+| Mouse | Look around |
+| Left mouse | Break the targeted block |
+| Right mouse | Place the selected block |
+| `E` | Open/close inventory |
+| `1`–`9`, mouse wheel | Select hotbar slot |
+| `F3` | Toggle debug overlay |
+| `F4` | Toggle noclip |
+| `F5` | Save immediately |
+| `Esc` | Pause; close inventory first when it is open |
+
+## Build and run
+
+Install a current stable Rust toolchain and the Linux graphics/audio development
+libraries required by Bevy. From the repository root:
+
+```bash
+cargo run
+```
+
+For a production build:
+
+```bash
+cargo build --release
+./target/release/rustcraft
+```
+
+Run the release binary with the repository as its working directory so Bevy can
+find `assets/`. The automated checks are:
+
+```bash
+cargo fmt -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo build --release
+```
+
+## Architecture
+
+The application is divided into small Bevy plugins: `game` owns state and menus,
+`generation` owns deterministic terrain and streaming, `meshing` owns worker mesh
+jobs and render assets, `chunk` owns voxel storage, `player` owns fixed-step
+movement/collision/water state, `interaction` owns raycasts and block edits,
+`inventory`/`item`/`crafting` own gameplay data, and `persistence` owns save jobs.
+
+Voxel blocks are stored in dense chunk arrays. There is no entity per voxel: a
+non-empty chunk has at most one opaque mesh entity and one water mesh entity.
+Workers receive immutable 3×3×3 snapshots; only the main world creates or updates
+Bevy assets. Mesh revisions reject stale worker results. Generation follows
+`Requested → Generating → Generated → Meshing → Ready` with bounded task and
+upload budgets.
+
 🇺🇸: hardcore open sauce mancrouft. It supports Linux, Windows, and possibly Mac (haven't tested it).
 
 🇷🇺: жоский опен сос манкруфт. Поддерживает линукс, виндус и может быть мак (не тестил)
@@ -82,8 +160,8 @@ current world save to finish. If saving fails, the pause menu stays open with
 the error so it can be retried.
 
 Settings apply immediately: render distance (2–16 chunks), mouse sensitivity,
-FOV (40–110 degrees), master volume and VSync. Chunk streaming continues while
-paused so changing render distance loads/unloads chunks without restarting.
+FOV (40–110 degrees), master volume and VSync. A changed render distance is
+applied when gameplay resumes; it does not require restarting the game.
 Preferences live separately in `config/settings.ron`, written atomically in the
 background and loaded at startup. They apply to every save slot. Audio volume
 controls both new and already-playing Bevy audio; this change adds no sound assets.
@@ -157,8 +235,9 @@ updates Bevy mesh assets. Every voxel or visible-boundary change advances a
 mesh revision, so results computed from an older revision are discarded and
 queued again. Generation and meshing priorities favor nearby chunks first and
 then slightly favor chunks along the camera's yaw/pitch direction. Priorities
-are rebuilt every frame, so obsolete queued work cannot accumulate after fast
-movement. Jobs outside the current streaming window are cancelled.
+refresh when the player moves, looks far enough in a new direction, or new work
+arrives, so obsolete queued work cannot accumulate after fast movement. Jobs
+outside the current streaming window are cancelled.
 
 The default scheduler budgets are four generation tasks, four meshing tasks,
 two meshing task starts per frame and two completed chunk-mesh uploads per
@@ -195,3 +274,52 @@ surfaces preserves lighting gradients.
 `cargo run --example greedy_smoke` opens a temporary world, exercises the real
 GPU material/shadow pipelines and exits automatically after 180 playable frames.
 Its saves and settings are isolated from normal worlds.
+
+## How world generation works
+
+Terrain is deterministic for `(seed, world x, world z)`. A biome sampler chooses
+the surface height and surface/subsurface blocks; deeper layers are stone. Caves
+are carved from continuous 3D noise, then coal and iron veins are generated from
+coordinate-stable random fields. Trees and their cross-chunk canopy blocks are
+placed after terrain and ores. Columns below the fixed sea level receive still
+water, while caves remain dry. Chunks predicted to be above the maximum possible
+terrain/tree height use an air fast path.
+
+## Save format overview
+
+Each world lives in `saves/<world>/`. `world.save` stores versioned serde/Postcard
+metadata: world name, seed, elapsed game time, player position, and rotation.
+`chunks.save` stores only player-edited chunk overrides. Saves are serialized on
+the background I/O pool and written through a temporary sibling file followed by
+an atomic replacement; the current save is never overwritten after a validation
+failure. Autosave runs every 60 seconds by default, F5 triggers a manual save,
+and normal exit waits for the final save. Preferences are separate in
+`config/settings.ron`.
+
+## Known limitations
+
+- Inventory contents and dropped items are not persisted yet.
+- Water is static: there is no fluid simulation, oxygen, or liquid spread.
+- The chunk archive is a single file and can take longer to serialize as the
+  number of edited chunks grows.
+- Transparent water uses Bevy's normal sorting and has no order-independent
+  transparency or animated surface simulation.
+- Terrain generation, lighting, and mesh uploads are bounded but still depend on
+  hardware and render distance; the F3 overlay is the intended diagnostic tool.
+- There is no multiplayer, mod/plugin API, server mode, or combat system.
+- Texture animation and biome color tinting are not implemented.
+
+## Roadmap
+
+The MVP is considered complete. Follow-up work should stay incremental:
+
+1. Add compact/incremental region storage if save profiling shows the monolithic
+   chunk archive becoming a real bottleneck.
+2. Persist inventory and dropped-item state with an explicit save schema version.
+3. Improve water presentation and optional fluid simulation without changing the
+   static-world compatibility contract.
+4. Add user-facing graphics/audio accessibility options and automated smoke tests
+   for packaged release builds.
+
+Large systems such as multiplayer, mod loading, and a full entity-component
+voxel representation are intentionally outside this MVP.
