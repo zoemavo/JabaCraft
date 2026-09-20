@@ -10,7 +10,7 @@ use crate::{
     chunk::ChunkStorage,
     coordinates::WorldBlockPos,
     inventory::PlayerInventory,
-    item::{DroppedItemAssets, ItemId, ItemRegistry, ToolProperties, ToolType, spawn_dropped_item},
+    item::{DroppedItemAssets, ItemId, ItemRegistry, ToolDefinition, spawn_dropped_item},
     player::Player,
     survival::{GameMode, Hunger},
 };
@@ -144,33 +144,23 @@ fn mining_duration(
     hardness: f32,
     base_multiplier: f32,
     minimum: f32,
-    tool: Option<ToolProperties>,
+    tool: Option<ToolDefinition>,
 ) -> f32 {
-    let effective_tool = tool.filter(|properties| tool_is_effective(block, properties.tool_type));
-    let mining_speed = effective_tool.map_or(1.0, |properties| properties.mining_speed.max(1.0));
-    let wrong_tool_penalty = if requires_pickaxe(block) && effective_tool.is_none() {
-        2.5
-    } else {
-        1.0
-    };
+    let effective_tool = tool.filter(|definition| definition.is_effective_against(block));
+    let mining_speed = effective_tool.map_or(1.0, |definition| definition.mining_speed_for(block));
+    let wrong_tool_penalty =
+        if ToolDefinition::block_requires_tool(block) && effective_tool.is_none() {
+            2.5
+        } else {
+            1.0
+        };
     (hardness.max(0.0) * base_multiplier.max(0.0) * wrong_tool_penalty / mining_speed)
         .max(minimum.max(0.0))
 }
 
-fn requires_pickaxe(block: BlockId) -> bool {
-    matches!(
-        block,
-        BlockId::STONE | BlockId::COAL_ORE | BlockId::IRON_ORE
-    )
-}
-
-fn tool_is_effective(block: BlockId, tool_type: ToolType) -> bool {
-    tool_type == ToolType::Pickaxe && requires_pickaxe(block)
-}
-
-fn can_harvest(block: BlockId, tool: Option<ToolProperties>) -> bool {
-    !requires_pickaxe(block)
-        || tool.is_some_and(|properties| tool_is_effective(block, properties.tool_type))
+fn can_harvest(block: BlockId, tool: Option<ToolDefinition>) -> bool {
+    !ToolDefinition::block_requires_tool(block)
+        || tool.is_some_and(|definition| definition.can_harvest(block))
 }
 
 #[cfg(test)]

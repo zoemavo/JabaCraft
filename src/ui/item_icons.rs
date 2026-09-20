@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::item::ItemId;
 
 const ICON_SIZE: f32 = 32.0;
-const ATLAS_COLUMNS: u32 = 4;
+const ATLAS_COLUMNS: u32 = 8;
 
 #[derive(Resource)]
 pub(super) struct ItemIconAssets {
@@ -39,11 +39,13 @@ mod tests {
 
     #[test]
     fn every_builtin_item_maps_inside_the_icon_atlas() {
+        const ATLAS_ROWS: u32 = 3;
+
         for item in ItemId::ALL {
             let index = u32::from(item.as_u16());
-            assert!(index < 16);
+            assert!(index < ATLAS_COLUMNS * ATLAS_ROWS);
             assert!(index % ATLAS_COLUMNS < ATLAS_COLUMNS);
-            assert!(index / ATLAS_COLUMNS < 4);
+            assert!(index / ATLAS_COLUMNS < ATLAS_ROWS);
         }
     }
 }

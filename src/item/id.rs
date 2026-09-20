@@ -1,7 +1,7 @@
 use std::fmt;
 
 /// Number of item types built into the base game.
-pub const BUILTIN_ITEM_COUNT: usize = 13;
+pub const BUILTIN_ITEM_COUNT: usize = 24;
 
 /// Compact item identity used by inventories and dropped-item data.
 ///
@@ -25,6 +25,17 @@ impl ItemId {
     pub const APPLE: Self = Self(10);
     pub const OAK_PLANKS: Self = Self(11);
     pub const STONE_PICKAXE: Self = Self(12);
+    pub const WOODEN_PICKAXE: Self = Self(13);
+    pub const IRON_PICKAXE: Self = Self(14);
+    pub const WOODEN_AXE: Self = Self(15);
+    pub const STONE_AXE: Self = Self(16);
+    pub const IRON_AXE: Self = Self(17);
+    pub const WOODEN_SHOVEL: Self = Self(18);
+    pub const STONE_SHOVEL: Self = Self(19);
+    pub const IRON_SHOVEL: Self = Self(20);
+    pub const WOODEN_SWORD: Self = Self(21);
+    pub const STONE_SWORD: Self = Self(22);
+    pub const IRON_SWORD: Self = Self(23);
 
     pub const ALL: [Self; BUILTIN_ITEM_COUNT] = [
         Self::GRASS_BLOCK,
@@ -40,6 +51,17 @@ impl ItemId {
         Self::APPLE,
         Self::OAK_PLANKS,
         Self::STONE_PICKAXE,
+        Self::WOODEN_PICKAXE,
+        Self::IRON_PICKAXE,
+        Self::WOODEN_AXE,
+        Self::STONE_AXE,
+        Self::IRON_AXE,
+        Self::WOODEN_SHOVEL,
+        Self::STONE_SHOVEL,
+        Self::IRON_SHOVEL,
+        Self::WOODEN_SWORD,
+        Self::STONE_SWORD,
+        Self::IRON_SWORD,
     ];
 
     pub const fn from_raw(raw: u16) -> Option<Self> {

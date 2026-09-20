@@ -3,8 +3,8 @@ use bevy::prelude::Resource;
 use crate::block::BlockId;
 
 use super::{
-    BLOCK_ITEM_MAX_STACK_SIZE, BUILTIN_ITEM_COUNT, FoodProperties, ItemDefinition, ItemId,
-    ItemStack, ItemStackError, ToolProperties, ToolType,
+    BLOCK_ITEM_MAX_STACK_SIZE, BUILTIN_ITEM_COUNT, FoodProperties, HarvestTier, ItemDefinition,
+    ItemId, ItemStack, ItemStackError, ToolDefinition, ToolProperties, ToolType,
 };
 
 /// Central source of item metadata and block-item mappings.
@@ -36,7 +36,7 @@ impl ItemRegistry {
         self.definition(id).food
     }
 
-    pub fn tool(&self, id: ItemId) -> Option<ToolProperties> {
+    pub fn tool(&self, id: ItemId) -> Option<ToolDefinition> {
         self.definition(id).tool
     }
 
@@ -93,19 +93,162 @@ impl Default for ItemRegistry {
                     tool: None,
                     debug_color: [0.64, 0.45, 0.24, 1.0],
                 },
-                ItemDefinition {
-                    name: "Stone Pickaxe",
-                    max_stack_size: 1,
-                    block: None,
-                    food: None,
-                    tool: Some(ToolProperties {
-                        tool_type: ToolType::Pickaxe,
-                        mining_speed: 4.0,
-                    }),
-                    debug_color: [0.43, 0.43, 0.43, 1.0],
-                },
+                tool_item(
+                    "Stone Pickaxe",
+                    ToolType::Pickaxe,
+                    HarvestTier::Stone,
+                    131,
+                    4.0,
+                    3.0,
+                    1.2,
+                    STONE_TOOL_COLOR,
+                ),
+                tool_item(
+                    "Wooden Pickaxe",
+                    ToolType::Pickaxe,
+                    HarvestTier::Wood,
+                    59,
+                    2.0,
+                    2.0,
+                    1.2,
+                    WOODEN_TOOL_COLOR,
+                ),
+                tool_item(
+                    "Iron Pickaxe",
+                    ToolType::Pickaxe,
+                    HarvestTier::Iron,
+                    250,
+                    6.0,
+                    4.0,
+                    1.2,
+                    IRON_TOOL_COLOR,
+                ),
+                tool_item(
+                    "Wooden Axe",
+                    ToolType::Axe,
+                    HarvestTier::Wood,
+                    59,
+                    2.0,
+                    7.0,
+                    0.8,
+                    WOODEN_TOOL_COLOR,
+                ),
+                tool_item(
+                    "Stone Axe",
+                    ToolType::Axe,
+                    HarvestTier::Stone,
+                    131,
+                    4.0,
+                    9.0,
+                    0.8,
+                    STONE_TOOL_COLOR,
+                ),
+                tool_item(
+                    "Iron Axe",
+                    ToolType::Axe,
+                    HarvestTier::Iron,
+                    250,
+                    6.0,
+                    9.0,
+                    0.9,
+                    IRON_TOOL_COLOR,
+                ),
+                tool_item(
+                    "Wooden Shovel",
+                    ToolType::Shovel,
+                    HarvestTier::Wood,
+                    59,
+                    2.0,
+                    2.5,
+                    1.0,
+                    WOODEN_TOOL_COLOR,
+                ),
+                tool_item(
+                    "Stone Shovel",
+                    ToolType::Shovel,
+                    HarvestTier::Stone,
+                    131,
+                    4.0,
+                    3.5,
+                    1.0,
+                    STONE_TOOL_COLOR,
+                ),
+                tool_item(
+                    "Iron Shovel",
+                    ToolType::Shovel,
+                    HarvestTier::Iron,
+                    250,
+                    6.0,
+                    4.5,
+                    1.0,
+                    IRON_TOOL_COLOR,
+                ),
+                tool_item(
+                    "Wooden Sword",
+                    ToolType::Sword,
+                    HarvestTier::Wood,
+                    59,
+                    1.5,
+                    4.0,
+                    1.6,
+                    WOODEN_TOOL_COLOR,
+                ),
+                tool_item(
+                    "Stone Sword",
+                    ToolType::Sword,
+                    HarvestTier::Stone,
+                    131,
+                    1.5,
+                    5.0,
+                    1.6,
+                    STONE_TOOL_COLOR,
+                ),
+                tool_item(
+                    "Iron Sword",
+                    ToolType::Sword,
+                    HarvestTier::Iron,
+                    250,
+                    1.5,
+                    6.0,
+                    1.6,
+                    IRON_TOOL_COLOR,
+                ),
             ],
         }
+    }
+}
+
+const WOODEN_TOOL_COLOR: [f32; 4] = [0.56, 0.38, 0.19, 1.0];
+const STONE_TOOL_COLOR: [f32; 4] = [0.43, 0.43, 0.43, 1.0];
+const IRON_TOOL_COLOR: [f32; 4] = [0.78, 0.79, 0.74, 1.0];
+
+#[allow(clippy::too_many_arguments)]
+const fn tool_item(
+    name: &'static str,
+    tool_type: ToolType,
+    harvest_tier: HarvestTier,
+    durability: u32,
+    mining_speed: f32,
+    attack_damage: f32,
+    attack_speed: f32,
+    debug_color: [f32; 4],
+) -> ItemDefinition {
+    ItemDefinition {
+        name,
+        max_stack_size: 1,
+        block: None,
+        food: None,
+        tool: Some(ToolDefinition {
+            tool_type,
+            durability,
+            properties: ToolProperties {
+                mining_speed,
+                attack_damage,
+                attack_speed,
+                harvest_tier,
+            },
+        }),
+        debug_color,
     }
 }
 
@@ -177,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn stone_pickaxe_is_an_unstackable_fast_pickaxe() {
+    fn stone_pickaxe_has_complete_tool_metadata() {
         let registry = ItemRegistry::default();
         let definition = registry.definition(ItemId::STONE_PICKAXE);
 
@@ -185,10 +328,65 @@ mod tests {
         assert_eq!(definition.block, None);
         assert_eq!(
             definition.tool,
-            Some(ToolProperties {
+            Some(ToolDefinition {
                 tool_type: ToolType::Pickaxe,
-                mining_speed: 4.0,
+                durability: 131,
+                properties: ToolProperties {
+                    mining_speed: 4.0,
+                    attack_damage: 3.0,
+                    attack_speed: 1.2,
+                    harvest_tier: HarvestTier::Stone,
+                },
             })
         );
+    }
+
+    #[test]
+    fn all_tool_and_weapon_ids_are_registered_by_category() {
+        let registry = ItemRegistry::default();
+        let expected = [
+            (ItemId::WOODEN_PICKAXE, ToolType::Pickaxe),
+            (ItemId::STONE_PICKAXE, ToolType::Pickaxe),
+            (ItemId::IRON_PICKAXE, ToolType::Pickaxe),
+            (ItemId::WOODEN_AXE, ToolType::Axe),
+            (ItemId::STONE_AXE, ToolType::Axe),
+            (ItemId::IRON_AXE, ToolType::Axe),
+            (ItemId::WOODEN_SHOVEL, ToolType::Shovel),
+            (ItemId::STONE_SHOVEL, ToolType::Shovel),
+            (ItemId::IRON_SHOVEL, ToolType::Shovel),
+            (ItemId::WOODEN_SWORD, ToolType::Sword),
+            (ItemId::STONE_SWORD, ToolType::Sword),
+            (ItemId::IRON_SWORD, ToolType::Sword),
+        ];
+
+        for (item, tool_type) in expected {
+            let definition = registry.definition(item);
+            let tool = definition.tool.expect("expected a tool definition");
+            assert_eq!(tool.tool_type, tool_type);
+            assert_eq!(definition.max_stack_size, 1);
+            assert!(tool.durability > 0);
+            assert!(tool.properties.mining_speed > 0.0);
+            assert!(tool.properties.attack_damage > 0.0);
+            assert!(tool.properties.attack_speed > 0.0);
+        }
+    }
+
+    #[test]
+    fn material_tiers_increase_core_tool_properties() {
+        let registry = ItemRegistry::default();
+        let wood = registry.tool(ItemId::WOODEN_PICKAXE).unwrap();
+        let stone = registry.tool(ItemId::STONE_PICKAXE).unwrap();
+        let iron = registry.tool(ItemId::IRON_PICKAXE).unwrap();
+
+        assert!(wood.durability < stone.durability && stone.durability < iron.durability);
+        assert!(
+            wood.properties.mining_speed < stone.properties.mining_speed
+                && stone.properties.mining_speed < iron.properties.mining_speed
+        );
+        assert!(
+            wood.properties.harvest_tier < stone.properties.harvest_tier
+                && stone.properties.harvest_tier < iron.properties.harvest_tier
+        );
+        assert!((stone.attack_cooldown_seconds() - (1.0 / 1.2)).abs() < f32::EPSILON);
     }
 }

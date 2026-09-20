@@ -8,7 +8,9 @@ mod stack;
 
 use bevy::prelude::*;
 
-pub use definition::{FoodProperties, ItemDefinition, ToolProperties, ToolType};
+pub use definition::{
+    FoodProperties, HarvestTier, ItemDefinition, ToolDefinition, ToolProperties, ToolType,
+};
 pub use dropped::{DroppedItem, DroppedItemAssets, spawn_dropped_item};
 pub use id::{BUILTIN_ITEM_COUNT, InvalidItemId, ItemId};
 pub use registry::ItemRegistry;

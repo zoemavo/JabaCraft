@@ -12,7 +12,7 @@ Playable voxel sandbox MVP built with Rust and Bevy 0.19.
 - Procedural voxel terrain with biomes, trees, caves, ores, water, and day/night lighting.
 - Chunk streaming with bounded asynchronous generation and meshing queues.
 - Walking, sprinting, jumping, voxel collision, swimming, block breaking and placement.
-- Dropped items, hotbar, inventory, basic crafting, pause menu and live settings.
+- Dropped items, hotbar, inventory, basic crafting, typed tools/weapons, pause menu and live settings.
 - Autosave, manual save, atomic world files, and restoration of edited chunks after restart.
 - Stylized sky, sun, ambient fill, soft shadows, fog, and underwater color/fog treatment.
 - F3 diagnostics for frame timing, chunk queues, mesh geometry, target block, biome, and profiling.
@@ -117,6 +117,21 @@ fog (14-block visibility), reduces exposure and cools the scene colors. The
 effect follows camera immersion independently of the body and clears on surfacing.
 The HUD stays readable. Existing health rules are unchanged.
 
+## Tools and weapons
+
+The item registry includes wooden, stone, and iron pickaxes, axes, shovels, and
+swords. Every tool is unstackable and has one `ToolDefinition` containing its
+category and durability plus `ToolProperties` for mining speed, attack damage,
+attack speed, and harvest tier. Pickaxes accelerate stone and ores, axes
+accelerate logs, shovels accelerate grass/dirt/sand, and swords accelerate
+leaves. Harvest-tier checks currently matter for stone, coal ore, and iron ore.
+
+All twelve tool and weapon sprites come unchanged from the official Faithful
+32x Java pack; this atlas contains no temporary tool placeholders. Durability
+wear and melee combat are not implemented yet, so durability and attack values
+are registry data for those follow-up systems. Items already work in inventory,
+hotbar, dropped-item, tooltip, and crafting data paths.
+
 Each chunk has independent opaque/cutout and water mesh assets and entities.
 Leaves retain the cutout material; water uses the Faithful atlas water tile on
 a separate matte alpha-blended, double-sided material and does not cast shadows.
@@ -216,6 +231,10 @@ resource pack (revision `cf009450b9b868ede1c354795433c3fbdda1205d`). Grass,
 foliage, and water colors are baked into the atlas because Rustcraft does not
 yet implement Minecraft-style biome tinting or animated textures.
 
+Tool and weapon icons use the unmodified 32×32 item textures from the same
+official repository's `java-latest` branch at revision
+`b27e488bfaf5d69230ec5922fc61315d3c8b2b64`.
+
 Faithful 32x is copyright © Faithful Resource Pack and is used under the
 [Faithful License](https://faithfulpack.net/license). JabaCraft is not an
 official Faithful project and is not endorsed by the Faithful team.
@@ -299,6 +318,8 @@ and normal exit waits for the final save. Preferences are separate in
 ## Known limitations
 
 - Inventory contents and dropped items are not persisted yet.
+- Durability wear and melee combat are not implemented yet; their tool values
+  are defined and validated but are not consumed by gameplay.
 - Water is static: there is no fluid simulation, oxygen, or liquid spread.
 - The chunk archive is a single file and can take longer to serialize as the
   number of edited chunks grows.
