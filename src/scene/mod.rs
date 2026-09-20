@@ -140,40 +140,24 @@ struct LandSpawn {
 const PREFERRED_SPAWN_X: i64 = 8;
 const PREFERRED_SPAWN_Z: i64 = 10;
 const SPAWN_SEARCH_STEP: i64 = 4;
+const PREFERRED_SAFE_SPAWN_RINGS: i64 = 64;
 const MAX_SPAWN_SEARCH_RINGS: i64 = 512;
 
 fn find_land_spawn(seed: u64) -> LandSpawn {
     let sampler = BiomeSampler::new(seed);
     let mut fallback_land = None;
     let mut highest_sample = None;
-    let mut try_spawn = |world_x: i64, world_z: i64| {
-        let sample = sampler.sample(world_x, world_z);
-        let candidate = LandSpawn {
-            x: world_x,
-            z: world_z,
-            surface_y: sample.terrain_height,
-        };
-        if highest_sample
-            .as_ref()
-            .is_none_or(|best: &LandSpawn| candidate.surface_y > best.surface_y)
-        {
-            highest_sample = Some(candidate);
-        }
-        if fallback_land.is_none()
-            && sample.terrain_height >= SEA_LEVEL
-            && feature_block_at(seed, world_x, i64::from(sample.terrain_height) + 1, world_z)
-                .is_none()
-            && feature_block_at(seed, world_x, i64::from(sample.terrain_height) + 2, world_z)
-                .is_none()
-        {
-            fallback_land = Some(candidate);
-        }
-        safe_land_spawn_at(seed, &sampler, world_x, world_z)
-    };
 
     for ring in 0..=MAX_SPAWN_SEARCH_RINGS {
         if ring == 0 {
-            if let Some(spawn) = try_spawn(PREFERRED_SPAWN_X, PREFERRED_SPAWN_Z) {
+            if let Some(spawn) = consider_land_spawn(
+                seed,
+                &sampler,
+                PREFERRED_SPAWN_X,
+                PREFERRED_SPAWN_Z,
+                &mut fallback_land,
+                &mut highest_sample,
+            ) {
                 return spawn;
             }
             continue;
@@ -186,7 +170,14 @@ fn find_land_spawn(seed: u64) -> LandSpawn {
             for offset_z in [min, max] {
                 let x = PREFERRED_SPAWN_X + offset_x * SPAWN_SEARCH_STEP;
                 let z = PREFERRED_SPAWN_Z + offset_z * SPAWN_SEARCH_STEP;
-                if let Some(spawn) = try_spawn(x, z) {
+                if let Some(spawn) = consider_land_spawn(
+                    seed,
+                    &sampler,
+                    x,
+                    z,
+                    &mut fallback_land,
+                    &mut highest_sample,
+                ) {
                     return spawn;
                 }
             }
@@ -196,10 +187,27 @@ fn find_land_spawn(seed: u64) -> LandSpawn {
             for offset_x in [min, max] {
                 let x = PREFERRED_SPAWN_X + offset_x * SPAWN_SEARCH_STEP;
                 let z = PREFERRED_SPAWN_Z + offset_z * SPAWN_SEARCH_STEP;
-                if let Some(spawn) = try_spawn(x, z) {
+                if let Some(spawn) = consider_land_spawn(
+                    seed,
+                    &sampler,
+                    x,
+                    z,
+                    &mut fallback_land,
+                    &mut highest_sample,
+                ) {
                     return spawn;
                 }
             }
+        }
+
+        // Some seeds do not have a perfectly flat 3x3 patch near the origin.
+        // Once the preferred search radius is exhausted, use the nearest
+        // feature-free land already found instead of blocking Loading while
+        // scanning the entire 4096x4096 fallback window.
+        if ring >= PREFERRED_SAFE_SPAWN_RINGS
+            && let Some(spawn) = fallback_land
+        {
+            return spawn;
         }
     }
 
@@ -209,6 +217,36 @@ fn find_land_spawn(seed: u64) -> LandSpawn {
     fallback_land
         .or(highest_sample)
         .expect("spawn search always samples the preferred position")
+}
+
+fn consider_land_spawn(
+    seed: u64,
+    sampler: &BiomeSampler,
+    world_x: i64,
+    world_z: i64,
+    fallback_land: &mut Option<LandSpawn>,
+    highest_sample: &mut Option<LandSpawn>,
+) -> Option<LandSpawn> {
+    let sample = sampler.sample(world_x, world_z);
+    let candidate = LandSpawn {
+        x: world_x,
+        z: world_z,
+        surface_y: sample.terrain_height,
+    };
+    if highest_sample
+        .as_ref()
+        .is_none_or(|best| candidate.surface_y > best.surface_y)
+    {
+        *highest_sample = Some(candidate);
+    }
+    if fallback_land.is_none()
+        && sample.terrain_height >= SEA_LEVEL
+        && feature_block_at(seed, world_x, i64::from(sample.terrain_height) + 1, world_z).is_none()
+        && feature_block_at(seed, world_x, i64::from(sample.terrain_height) + 2, world_z).is_none()
+    {
+        *fallback_land = Some(candidate);
+    }
+    safe_land_spawn_at(seed, sampler, world_x, world_z)
 }
 
 fn safe_land_spawn_at(
@@ -253,7 +291,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spawn_search_moves_ocean_starts_onto_safe_land() {
+    fn spawn_search_moves_ocean_starts_onto_clear_land() {
         let mut checked_ocean_start = false;
 
         for seed in 0..128 {
@@ -262,17 +300,30 @@ mod tests {
             }
 
             let spawn = find_land_spawn(seed);
-            let sampler = BiomeSampler::new(seed);
-            assert_eq!(
-                safe_land_spawn_at(seed, &sampler, spawn.x, spawn.z),
-                Some(spawn),
-                "seed {seed} produced an unsafe spawn at {spawn:?}"
+            assert!(
+                spawn.surface_y >= SEA_LEVEL,
+                "seed {seed} produced an ocean spawn at {spawn:?}"
             );
+            assert_eq!(terrain_height_at(seed, spawn.x, spawn.z), spawn.surface_y);
+            let feet_y = i64::from(spawn.surface_y) + 1;
+            assert_eq!(feature_block_at(seed, spawn.x, feet_y, spawn.z), None);
+            assert_eq!(feature_block_at(seed, spawn.x, feet_y + 1, spawn.z), None);
         }
 
         assert!(
             checked_ocean_start,
             "test seeds should include at least one former ocean spawn"
         );
+    }
+
+    #[test]
+    fn saved_world_seed_does_not_trigger_exhaustive_spawn_scan() {
+        // Regression seed from a real save that previously kept Loading on the
+        // main thread for roughly a minute before the world appeared.
+        let spawn = find_land_spawn(1_789_450_179_375_016_518);
+
+        assert!(spawn.surface_y >= SEA_LEVEL);
+        assert!((spawn.x - PREFERRED_SPAWN_X).abs() <= 256);
+        assert!((spawn.z - PREFERRED_SPAWN_Z).abs() <= 256);
     }
 }
