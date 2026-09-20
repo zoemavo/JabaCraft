@@ -14,7 +14,7 @@ use crate::{
     persistence::PersistenceSaveSet,
 };
 
-use item_icons::{ItemIconAssets, set_item_icon};
+use item_icons::{ItemIconAssets, durability_color, durability_fraction, set_item_icon};
 
 const UI_SCALE: f32 = 1.5;
 const SLOT_SIZE: f32 = 40.0 * UI_SCALE;
@@ -36,6 +36,12 @@ struct HotbarSelectionView(usize);
 
 #[derive(Component)]
 struct HotbarCountView(usize);
+
+#[derive(Component)]
+struct HotbarDurabilityBack(usize);
+
+#[derive(Component)]
+struct HotbarDurabilityFill(usize);
 
 #[derive(Component)]
 struct HotbarSelectedName;
@@ -66,6 +72,7 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Update,
                 (
+                    item_icons::log_missing_item_icons,
                     inventory_panel::handle_inventory_clicks,
                     inventory_panel::handle_crafting_click,
                 )
@@ -202,10 +209,34 @@ fn spawn_hotbar_slot(parent: &mut ChildSpawnerCommands, index: usize) {
                     ..default()
                 },
             ));
+            slot.spawn((
+                Name::new("Tool Durability Background"),
+                HotbarDurabilityBack(index),
+                Node {
+                    display: Display::None,
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Px(2.0 * UI_SCALE),
+                    width: Val::Px(28.0 * UI_SCALE),
+                    height: Val::Px(4.0 * UI_SCALE),
+                    padding: UiRect::all(Val::Px(UI_SCALE)),
+                    ..default()
+                },
+                BackgroundColor(Color::BLACK),
+            ))
+            .with_child((
+                Name::new("Tool Durability Fill"),
+                HotbarDurabilityFill(index),
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.0, 1.0, 0.0)),
+            ));
         });
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn sync_hotbar_ui(
     inventory: Res<PlayerInventory>,
     inventory_state: Res<InventoryState>,
@@ -218,6 +249,14 @@ fn sync_hotbar_ui(
     >,
     mut icons: Query<(&HotbarIconView, &mut ImageNode), Without<HotbarSelectionView>>,
     mut counts: Query<(&HotbarCountView, &mut Text), Without<HotbarSelectedName>>,
+    mut durability_backs: Query<
+        (&HotbarDurabilityBack, &mut Node),
+        (Without<HotbarDurabilityFill>, Without<HotbarRoot>),
+    >,
+    mut durability_fills: Query<
+        (&HotbarDurabilityFill, &mut Node, &mut BackgroundColor),
+        (Without<HotbarDurabilityBack>, Without<HotbarRoot>),
+    >,
     mut selected_name: Single<&mut Text, (With<HotbarSelectedName>, Without<HotbarCountView>)>,
     asset_server: Res<AssetServer>,
 ) {
@@ -229,7 +268,7 @@ fn sync_hotbar_ui(
         };
     }
 
-    if !inventory.is_changed() && !inventory_state.is_changed() {
+    if !inventory.is_changed() && !inventory_state.is_changed() && !icon_assets.is_changed() {
         return;
     }
 
@@ -253,8 +292,22 @@ fn sync_hotbar_ui(
     for (view, mut text) in &mut counts {
         text.0 = inventory
             .slot(view.0)
+            .filter(|stack| stack.count() > 1)
             .map(|stack| stack.count().to_string())
             .unwrap_or_default();
+    }
+
+    for (view, mut node) in &mut durability_backs {
+        node.display = if durability_fraction(inventory.slot(view.0), &registry).is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    for (view, mut node, mut background) in &mut durability_fills {
+        let fraction = durability_fraction(inventory.slot(view.0), &registry).unwrap_or(0.0);
+        node.width = Val::Percent(fraction * 100.0);
+        background.0 = durability_color(fraction);
     }
 
     selected_name.0 = inventory

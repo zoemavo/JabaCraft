@@ -8,7 +8,7 @@ use crate::{
     item::ItemRegistry,
 };
 
-use super::item_icons::{ItemIconAssets, set_item_icon};
+use super::item_icons::{ItemIconAssets, durability_color, durability_fraction, set_item_icon};
 
 const UI_SCALE: f32 = 1.5;
 const SLOT_SIZE: f32 = 36.0 * UI_SCALE;
@@ -36,6 +36,12 @@ pub(super) struct InventorySlotIcon(usize);
 
 #[derive(Component)]
 pub(super) struct InventorySlotCount(usize);
+
+#[derive(Component)]
+pub(super) struct InventoryDurabilityBack(usize);
+
+#[derive(Component)]
+pub(super) struct InventoryDurabilityFill(usize);
 
 #[derive(Component)]
 pub(super) struct CursorHeldView;
@@ -497,6 +503,30 @@ fn spawn_inventory_slot(parent: &mut ChildSpawnerCommands, index: usize) {
                     ..default()
                 },
             ));
+            slot.spawn((
+                Name::new("Inventory Tool Durability Background"),
+                InventoryDurabilityBack(index),
+                Node {
+                    display: Display::None,
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Px(2.0 * UI_SCALE),
+                    width: Val::Px(26.0 * UI_SCALE),
+                    height: Val::Px(4.0 * UI_SCALE),
+                    padding: UiRect::all(Val::Px(UI_SCALE)),
+                    ..default()
+                },
+                BackgroundColor(Color::BLACK),
+            ))
+            .with_child((
+                Name::new("Inventory Tool Durability Fill"),
+                InventoryDurabilityFill(index),
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.0, 1.0, 0.0)),
+            ));
         });
 }
 
@@ -660,14 +690,31 @@ mod tests {
     }
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn sync_inventory_panel(
     state: Res<InventoryState>,
     inventory: Res<PlayerInventory>,
     icon_assets: Res<ItemIconAssets>,
+    registry: Res<ItemRegistry>,
     mut panel: Single<&mut Node, With<InventoryPanelRoot>>,
     mut slots: Query<(&InventorySlotView, &Interaction, &mut BackgroundColor)>,
     mut icons: Query<(&InventorySlotIcon, &mut ImageNode)>,
     mut counts: Query<(&InventorySlotCount, &mut Text)>,
+    mut durability_backs: Query<
+        (&InventoryDurabilityBack, &mut Node),
+        (
+            Without<InventoryDurabilityFill>,
+            Without<InventoryPanelRoot>,
+        ),
+    >,
+    mut durability_fills: Query<
+        (&InventoryDurabilityFill, &mut Node, &mut BackgroundColor),
+        (
+            Without<InventoryDurabilityBack>,
+            Without<InventoryPanelRoot>,
+            Without<InventorySlotView>,
+        ),
+    >,
 ) {
     if state.is_changed() {
         panel.display = if state.is_open() {
@@ -686,7 +733,7 @@ pub(super) fn sync_inventory_panel(
             Color::NONE
         };
     }
-    if !state.is_changed() && !inventory.is_changed() {
+    if !state.is_changed() && !inventory.is_changed() && !icon_assets.is_changed() {
         return;
     }
     for (view, mut image) in &mut icons {
@@ -699,8 +746,21 @@ pub(super) fn sync_inventory_panel(
     for (view, mut text) in &mut counts {
         text.0 = inventory
             .slot(view.0)
+            .filter(|stack| stack.count() > 1)
             .map(|stack| stack.count().to_string())
             .unwrap_or_default();
+    }
+    for (view, mut node) in &mut durability_backs {
+        node.display = if durability_fraction(inventory.slot(view.0), &registry).is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    for (view, mut node, mut background) in &mut durability_fills {
+        let fraction = durability_fraction(inventory.slot(view.0), &registry).unwrap_or(0.0);
+        node.width = Val::Percent(fraction * 100.0);
+        background.0 = durability_color(fraction);
     }
 }
 

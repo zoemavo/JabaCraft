@@ -52,7 +52,7 @@ pub(super) fn break_selected_block(
     item_registry: Res<ItemRegistry>,
     dropped_item_assets: Res<DroppedItemAssets>,
     mut storage: ResMut<ChunkStorage>,
-    inventory: Res<PlayerInventory>,
+    mut inventory: ResMut<PlayerInventory>,
     mut hunger: Single<&mut Hunger, With<Player>>,
     mut selected: ResMut<CameraRaycast>,
     mut input: ResMut<BlockBreakInput>,
@@ -126,6 +126,9 @@ pub(super) fn break_selected_block(
                     hit.position.z as f32 + 0.5,
                 );
                 spawn_dropped_item(&mut commands, &dropped_item_assets, stack, center);
+            }
+            if held_tool.is_some() {
+                inventory.damage_selected_tool(&item_registry, 1);
             }
             hunger.add_exhaustion(0.005);
         }

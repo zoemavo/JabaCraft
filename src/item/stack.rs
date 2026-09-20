@@ -8,6 +8,7 @@ pub struct ItemStack {
     item: ItemId,
     count: u32,
     max_stack_size: u32,
+    damage: u32,
 }
 
 impl ItemStack {
@@ -26,6 +27,7 @@ impl ItemStack {
             item,
             count,
             max_stack_size,
+            damage: 0,
         })
     }
 
@@ -39,6 +41,30 @@ impl ItemStack {
 
     pub const fn max_stack_size(&self) -> u32 {
         self.max_stack_size
+    }
+
+    pub const fn damage(&self) -> u32 {
+        self.damage
+    }
+
+    pub const fn remaining_durability(&self, maximum: u32) -> u32 {
+        maximum.saturating_sub(self.damage)
+    }
+
+    pub fn durability_fraction(&self, maximum: u32) -> f32 {
+        if maximum == 0 {
+            return 0.0;
+        }
+        self.remaining_durability(maximum) as f32 / maximum as f32
+    }
+
+    /// Damages one durable item and returns true when it has broken.
+    pub fn apply_damage(&mut self, amount: u32, maximum: u32) -> bool {
+        if maximum == 0 || amount == 0 {
+            return false;
+        }
+        self.damage = self.damage.saturating_add(amount).min(maximum);
+        self.damage >= maximum
     }
 
     pub const fn is_empty(&self) -> bool {
@@ -65,7 +91,10 @@ impl ItemStack {
 
     /// Moves matching items from source into this stack.
     pub fn merge(&mut self, source: &mut Self) -> u32 {
-        if self.item != source.item || self.max_stack_size != source.max_stack_size {
+        if self.item != source.item
+            || self.max_stack_size != source.max_stack_size
+            || self.damage != source.damage
+        {
             return 0;
         }
 
@@ -87,6 +116,7 @@ impl ItemStack {
             item: self.item,
             count: split_count,
             max_stack_size: self.max_stack_size,
+            damage: self.damage,
         })
     }
 }
@@ -196,5 +226,17 @@ mod tests {
         assert_eq!(original.split(10).unwrap().count(), 3);
         assert!(original.is_empty());
         assert_eq!(original.split(1), None);
+    }
+
+    #[test]
+    fn durability_is_clamped_and_reports_when_tool_breaks() {
+        let mut tool = stack(ItemId::WOODEN_PICKAXE, 1, 1);
+
+        assert_eq!(tool.durability_fraction(59), 1.0);
+        assert!(!tool.apply_damage(10, 59));
+        assert_eq!(tool.damage(), 10);
+        assert!((tool.durability_fraction(59) - 49.0 / 59.0).abs() < f32::EPSILON);
+        assert!(tool.apply_damage(100, 59));
+        assert_eq!(tool.remaining_durability(59), 0);
     }
 }

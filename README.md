@@ -126,11 +126,13 @@ attack speed, and harvest tier. Pickaxes accelerate stone and ores, axes
 accelerate logs, shovels accelerate grass/dirt/sand, and swords accelerate
 leaves. Harvest-tier checks currently matter for stone, coal ore, and iron ore.
 
-All twelve tool and weapon sprites come unchanged from the official Faithful
-32x Java pack; this atlas contains no temporary tool placeholders. Durability
-wear and melee combat are not implemented yet, so durability and attack values
-are registry data for those follow-up systems. Items already work in inventory,
-hotbar, dropped-item, tooltip, and crafting data paths.
+All tool, weapon, resource, and block-item GUI icons use individual Faithful 32x
+PNG files selected through the `ItemId` icon catalog. Missing files are logged
+with their item name and path, then use Faithful's barrier icon as the neutral
+placeholder. Tools lose durability while breaking blocks; hotbar and inventory
+slots show the remaining green-to-red durability bar. Melee combat is not
+implemented yet. Items work in inventory, hotbar, dropped-item, tooltip, and
+crafting data paths.
 
 Each chunk has independent opaque/cutout and water mesh assets and entities.
 Leaves retain the cutout material; water uses the Faithful atlas water tile on
@@ -234,6 +236,12 @@ yet implement Minecraft-style biome tinting or animated textures.
 Tool and weapon icons use the unmodified 32×32 item textures from the same
 official repository's `java-latest` branch at revision
 `b27e488bfaf5d69230ec5922fc61315d3c8b2b64`.
+Block-item icons use that revision's corresponding Faithful block PNG because
+Minecraft resource packs render block items from block models rather than
+shipping separate flat item sprites. Water uses the first 32×32 frame of the
+official `water_still.png`; foliage and water receive the same runtime tinting
+their Minecraft models expect. The missing-asset placeholder is Faithful's
+unmodified `barrier.png`.
 
 Faithful 32x is copyright © Faithful Resource Pack and is used under the
 [Faithful License](https://faithfulpack.net/license). JabaCraft is not an
@@ -318,8 +326,7 @@ and normal exit waits for the final save. Preferences are separate in
 ## Known limitations
 
 - Inventory contents and dropped items are not persisted yet.
-- Durability wear and melee combat are not implemented yet; their tool values
-  are defined and validated but are not consumed by gameplay.
+- Melee combat does not consume the existing weapon attack stats yet.
 - Water is static: there is no fluid simulation, oxygen, or liquid spread.
 - The chunk archive is a single file and can take longer to serialize as the
   number of edited chunks grows.

@@ -76,6 +76,20 @@ impl PlayerInventory {
         true
     }
 
+    /// Applies wear to the selected tool and removes it when durability reaches zero.
+    pub fn damage_selected_tool(&mut self, registry: &ItemRegistry, amount: u32) -> bool {
+        let Some(stack) = self.slots[self.selected_hotbar].as_mut() else {
+            return false;
+        };
+        let Some(tool) = registry.tool(stack.item()) else {
+            return false;
+        };
+        if stack.apply_damage(amount, tool.durability) {
+            self.slots[self.selected_hotbar] = None;
+        }
+        true
+    }
+
     /// Adds items to matching stacks first and then empty slots.
     ///
     /// Returns the amount that did not fit.
@@ -307,6 +321,19 @@ mod tests {
         inventory.cycle_hotbar(-1);
         assert_eq!(inventory.selected_hotbar_index(), 8);
         assert!(!inventory.select_hotbar(HOTBAR_SLOT_COUNT));
+    }
+
+    #[test]
+    fn selected_tool_takes_damage_and_breaks_at_its_limit() {
+        let registry = ItemRegistry::default();
+        let mut inventory = empty_inventory();
+        inventory.slots[0] = Some(registry.create_stack(ItemId::WOODEN_PICKAXE, 1).unwrap());
+
+        assert!(inventory.damage_selected_tool(&registry, 58));
+        assert_eq!(inventory.slot(0).unwrap().damage(), 58);
+        assert!(inventory.damage_selected_tool(&registry, 1));
+        assert_eq!(inventory.slot(0), None);
+        assert!(!inventory.damage_selected_tool(&registry, 1));
     }
 
     #[test]
